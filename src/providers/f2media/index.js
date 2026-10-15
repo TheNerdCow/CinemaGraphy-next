@@ -1,6 +1,5 @@
 /**
- * F2Media provider — clean-room adapter.
- * Site-first meta; Cinemeta only on strict title match; TTL cache.
+ * F2Media provider — site-first posters, strict Cinemeta, TTL cache, polite fetch.
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
@@ -20,6 +19,7 @@ import {
 } from './parse.js'
 import { parseListingHtml, parseHomeRail } from './parse-listing.js'
 import { parseSeriesEpisodes } from './parse-series.js'
+import { extractPosterFromHtml } from './poster.js'
 import {
   getCatalogById,
   toManifestCatalogs,
@@ -28,12 +28,12 @@ import {
 
 const DEFAULT_BASE = 'https://www.film2med.top'
 const PAGE_SIZE = 16
-const CACHE_LIST_MS = 8 * 60_000
-const CACHE_DETAIL_MS = 15 * 60_000
-const CACHE_HTML_MS = 6 * 60_000
+const CACHE_LIST_MS = 12 * 60_000
+const CACHE_DETAIL_MS = 20 * 60_000
+const CACHE_HTML_MS = 10 * 60_000
 
 export function createF2MediaProvider(deps = {}) {
-  const http = deps.http || createHttpClient()
+  const http = deps.http || createHttpClient({ minGapMs: 150 })
   const logger = deps.logger || console
   const cinemeta = deps.cinemeta || createCinemetaClient({ http })
   const cache = deps.cache || createMemoryCache(CACHE_LIST_MS)
@@ -69,19 +69,14 @@ export function createF2MediaProvider(deps = {}) {
       const q = String(query || '').trim()
       if (!q) return []
       const base = this.baseUrl(ctx.config || {})
-      const cacheKey = `search:${base}:${q}`
       return cache.wrap(
-        cacheKey,
+        `search:${base}:${q}`,
         async () => {
-          const url = `${base}/?s=${encodeURIComponent(q)}`
-          const res = await http.get(url, {
+          const res = await http.get(`${base}/?s=${encodeURIComponent(q)}`, {
             timeoutMs: ctx.timeoutMs || 15_000,
-            headers: { 'Accept-Language': 'fa-IR,fa;q=0.9,en;q=0.8' },
           })
           if (!res.ok) return []
-          const html = await res.text()
-          const parsed = parseSearchHtml(html, base)
-          return mapItems(parsed)
+          return mapItems(parseSearchHtml(await res.text(), base))
         },
         CACHE_LIST_MS,
       )
@@ -93,10 +88,9 @@ export function createF2MediaProvider(deps = {}) {
       const base = this.baseUrl(ctx.config || {})
       const skip = Number(ctx.skip) || 0
       const page = Math.floor(skip / PAGE_SIZE) + 1
-      const cacheKey = `browse:${base}:${catalogId}:${page}`
 
       return cache.wrap(
-        cacheKey,
+        `browse:${base}:${catalogId}:${page}`,
         async () => {
           let parsed = []
           if (page === 1 && cat.homeRail) {
@@ -108,12 +102,15 @@ export function createF2MediaProvider(deps = {}) {
             const html = await fetchHtml(http, url, ctx, cache, `html:${url}`)
             if (html) parsed = parseListingHtml(html, base)
           }
-
           parsed = parsed.filter(
             (it) => it.type === cat.type || cat.id === 'f2media_coming_soon',
           )
-          logger.info?.('f2media browse', { catalogId, page, count: parsed.length })
-          // Posters: only metahub when we already know imdb later; for list use site or skip slow search
+          logger.info?.('f2media browse', {
+            catalogId,
+            page,
+            count: parsed.length,
+            withPoster: parsed.filter((p) => p.poster).length,
+          })
           return mapItems(parsed.slice(0, 30))
         },
         CACHE_LIST_MS,
@@ -124,23 +121,25 @@ export function createF2MediaProvider(deps = {}) {
       const pagePath = decodePageId(itemId)
       if (!pagePath) return null
       const base = this.baseUrl(ctx.config || {})
-      const cacheKey = `detail:${base}:${pagePath}`
 
       return cache.wrap(
-        cacheKey,
+        `detail:${base}:${pagePath}`,
         async () => {
-          const url = `${base}/${pagePath}`
-          const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 15_000 })
+          const res = await http.get(`${base}/${pagePath}`, {
+            timeoutMs: ctx.timeoutMs || 15_000,
+          })
           if (!res.ok) return null
           const html = await res.text()
           const meta = parseDetailMeta(html, base)
+          // Site poster first (intocdn / cover)
+          const sitePoster = extractPosterFromHtml(html, base) || meta.poster
+
           const isSeries =
             type === 'series' || meta.type === 'series' || /\/series\//i.test(pagePath)
 
           let streams = []
           let episodes = []
           let videos = []
-
           if (isSeries) {
             const parsed = parseSeriesEpisodes(html, base)
             episodes = parsed.episodes
@@ -150,15 +149,10 @@ export function createF2MediaProvider(deps = {}) {
             streams = parseDetailStreams(html, base)
           }
 
-          // Cinemeta only with STRICT match — never replace site title with wrong show
           let enriched = null
           if (meta.imdb) {
             const byId = await cinemeta.byImdb(meta.imdb, isSeries ? 'series' : 'movie')
-            if (byId && isStrictTitleMatch(meta.title, byId.name, meta.year)) {
-              enriched = byId
-            } else if (byId && !meta.title) {
-              enriched = byId
-            }
+            if (byId && isStrictTitleMatch(meta.title, byId.name, meta.year)) enriched = byId
           }
           if (!enriched && meta.title) {
             const q = meta.year ? `${meta.title} ${meta.year}` : meta.title
@@ -169,27 +163,25 @@ export function createF2MediaProvider(deps = {}) {
           }
 
           const imdb = enriched?.imdb || meta.imdb
-          // Prefer site title always as base; Cinemeta name only when strict match
-          const title = meta.title || enriched?.name
+          // Poster priority: site (intocdn) → metahub → cinemeta
           const poster =
-            (imdb && metahubPoster(imdb)) || meta.poster || enriched?.poster
+            sitePoster || (imdb && metahubPoster(imdb)) || enriched?.poster
           const background =
-            (imdb && metahubBackground(imdb)) || enriched?.background || poster
-          const description =
-            (enriched?.description && enriched.description.length > 40
-              ? enriched.description
-              : null) || meta.description
+            sitePoster || (imdb && metahubBackground(imdb)) || enriched?.background || poster
 
           return {
             id: itemId,
             pagePath,
             type: isSeries ? 'series' : 'movie',
-            title,
+            title: meta.title || enriched?.name,
             year: meta.year || (enriched?.year ? parseInt(String(enriched.year), 10) : undefined),
             imdb,
             poster,
             background,
-            description,
+            description:
+              (enriched?.description && enriched.description.length > 40
+                ? enriched.description
+                : null) || meta.description,
             genres: enriched?.genres,
             imdbRating: enriched?.imdbRating,
             runtime: enriched?.runtime,
@@ -205,7 +197,6 @@ export function createF2MediaProvider(deps = {}) {
     async getStreams(detail, videoCtx = null) {
       const season = videoCtx?.season
       const episode = videoCtx?.episode
-
       if (detail?.type === 'series' && season != null && episode != null) {
         const ep = (detail.episodes || []).find(
           (e) => e.season === Number(season) && e.episode === Number(episode),
@@ -213,7 +204,6 @@ export function createF2MediaProvider(deps = {}) {
         if (!ep?.streams?.length) return []
         return ep.streams.map(toStream)
       }
-
       if (!detail?.streams?.length) return []
       return detail.streams.map(toStream)
     },
@@ -256,10 +246,7 @@ async function fetchHtml(http, url, ctx, cache, cacheKey) {
   return cache.wrap(
     cacheKey,
     async () => {
-      const res = await http.get(url, {
-        timeoutMs: ctx.timeoutMs || 15_000,
-        headers: { 'Accept-Language': 'fa-IR,fa;q=0.9,en;q=0.8' },
-      })
+      const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 15_000 })
       if (!res.ok) return null
       return res.text()
     },

@@ -2,17 +2,14 @@
  * Parse F2Media listing pages (homepage rails, /movies/, /series/, /category/…).
  */
 
-import { encodePageId, decodePageId } from './parse.js'
+import { encodePageId } from './parse.js'
+import { extractPosterNearCard } from './poster.js'
 
-/**
- * @returns {Array<{ itemId: string, title: string, year?: number, type: 'movie'|'series', poster?: string, pagePath: string }>}
- */
 export function parseListingHtml(html, baseUrl) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const results = []
   const seen = new Set()
 
-  // Primary: stretched-link + entry-title (homepage + archives)
   const cardRe =
     /<a[^>]+href=["']([^"']+)["'][^>]*class=["'][^"']*stretched-link[^"']*["'][^>]*>[\s\S]*?<h2[^>]*class=["'][^"']*entry-title[^"']*["'][^>]*>([\s\S]*?)<\/h2>/gi
 
@@ -27,13 +24,9 @@ export function parseListingHtml(html, baseUrl) {
     if (!pagePath || seen.has(pagePath)) continue
     seen.add(pagePath)
 
-    // poster: look backward in article for img
-    const start = Math.max(0, m.index - 1200)
-    const slice = html.slice(start, m.index + 50)
-    let poster = match1(slice, /<img[^>]+src=["']([^"']+)["']/i)
-    if (poster && poster.startsWith('./')) poster = undefined
-    if (poster) poster = resolveUrl(base, poster) || poster
-
+    const start = Math.max(0, m.index - 1500)
+    const slice = html.slice(start, m.index + 80)
+    const poster = extractPosterNearCard(slice, base)
     const year = extractYear(title) || extractYear(slice)
     const type = /\/series\//i.test(abs) ? 'series' : 'movie'
 
@@ -48,7 +41,6 @@ export function parseListingHtml(html, baseUrl) {
     if (results.length >= 60) break
   }
 
-  // Fallback: any /{id}/{slug}/ or /series/{slug}/ with nearby title
   if (results.length === 0) {
     const linkRe =
       /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>[\s\S]{0,300}?<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi
@@ -74,7 +66,6 @@ export function parseListingHtml(html, baseUrl) {
   return results
 }
 
-/** Extract one homepage carousel rail by index (1-based) */
 export function parseHomeRail(html, baseUrl, railIndex) {
   const start = html.indexOf(`id="carougsel-posts${railIndex}"`)
   if (start < 0) return parseListingHtml(html, baseUrl)
@@ -91,7 +82,6 @@ function isContentUrl(abs, base) {
     const path = u.pathname.replace(/\/+$/, '')
     if (/\/(genres|category|tag|person|profile|login|movies|series)\/?$/i.test(path)) return false
     if (/\/series\/[a-z0-9\-]+$/i.test(path)) return true
-    // /12345/slug
     if (/\/\d+\/[a-z0-9\-]+$/i.test(path)) return true
     return false
   } catch {
@@ -140,10 +130,3 @@ function stripTags(s) {
     .replace(/\s+/g, ' ')
     .trim()
 }
-
-function match1(s, re) {
-  const m = String(s).match(re)
-  return m ? m[1] : null
-}
-
-export { decodePageId }
