@@ -1,6 +1,6 @@
 /**
  * F2Media provider — clean-room adapter.
- * Enabled when F2MEDIA_BASEURL is set.
+ * On by default (public site); set F2MEDIA_BASEURL= to override host, or providers.f2media.enabled=false to disable.
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
@@ -35,15 +35,15 @@ export function createF2MediaProvider(deps = {}) {
       if (config.providersEnabled?.length) {
         return config.providersEnabled.includes('f2media')
       }
-      return Boolean(p?.baseUrl || process.env.F2MEDIA_BASEURL)
+      // Default ON — public provider; disable explicitly if needed
+      return true
     },
 
     baseUrl(config) {
-      return (
-        config.providers?.f2media?.baseUrl ||
-        process.env.F2MEDIA_BASEURL ||
-        DEFAULT_BASE
-      ).replace(/\/+$/, '')
+      const fromConfig = config.providers?.f2media?.baseUrl
+      const fromEnv = process.env.F2MEDIA_BASEURL
+      const raw = (fromConfig || fromEnv || DEFAULT_BASE).trim()
+      return raw.replace(/\/+$/, '') || DEFAULT_BASE
     },
 
     async search(query, ctx = {}) {
@@ -57,11 +57,12 @@ export function createF2MediaProvider(deps = {}) {
           headers: { 'Accept-Language': 'fa-IR,fa;q=0.9,en;q=0.8' },
         })
         if (!res.ok) {
-          logger.warn?.('f2media search non-OK', { status: res.status })
+          logger.warn?.('f2media search non-OK', { status: res.status, url })
           return []
         }
         const html = await res.text()
         const parsed = parseSearchHtml(html, base)
+        logger.info?.('f2media search', { q, count: parsed.length, htmlLen: html.length })
         return parsed.map((item) => ({
           internalId: makeInternalId('f2media', item.itemId),
           type: item.type,
@@ -72,7 +73,7 @@ export function createF2MediaProvider(deps = {}) {
           externalRefs: { pagePath: item.pagePath },
         }))
       } catch (err) {
-        logger.warn?.('f2media search failed', { message: err.message, code: err.code })
+        logger.warn?.('f2media search failed', { message: err.message, code: err.code, url })
         return []
       }
     },

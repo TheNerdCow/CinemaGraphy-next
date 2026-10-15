@@ -1,13 +1,14 @@
 {
   "name": "cinemagraphy-next",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "Independent modular CinemaGraphy rewrite (Stremio/Nuvio). Clean-room — not a fork of production.",
   "engines": { "node": ">=20" },
   "scripts": {
-    "start": "node src/runtimes/node/server.js",
-    "dev": "node --watch src/runtimes/node/server.js",
+    "start": "node --env-file=.env src/runtimes/node/server.js",
+    "start:noenv": "node src/runtimes/node/server.js",
+    "dev": "node --watch --env-file=.env src/runtimes/node/server.js",
     "test": "node --test tests/unit/*.test.js tests/providers/*.test.js",
     "check": "node --check src/runtimes/node/server.js"
   },

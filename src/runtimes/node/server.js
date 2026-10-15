@@ -32,10 +32,12 @@ function resolveConfig(req) {
   })
 }
 
-function parseExtra(extraArgs) {
-  if (!extraArgs) return {}
+/** Stremio extra path segment → object (search=foo&skip=0) */
+function parseExtra(raw) {
+  if (!raw) return {}
   try {
-    return Object.fromEntries(new URLSearchParams(String(extraArgs).replace(/\.json$/i, '')))
+    const s = String(raw).replace(/\.json$/i, '')
+    return Object.fromEntries(new URLSearchParams(s))
   } catch {
     return {}
   }
@@ -55,7 +57,7 @@ function createApp() {
     }))
     const manifest = buildStremioManifest(config, providers)
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
-    res.setHeader('Cache-Control', 'public, max-age=60')
+    res.setHeader('Cache-Control', 'public, max-age=30')
     res.json(manifest)
   }
 
@@ -65,15 +67,26 @@ function createApp() {
 <title>CinemaGraphy Next</title>
 <style>body{font-family:system-ui,sans-serif;background:#0b0d12;color:#e8eaef;margin:0;padding:2rem;line-height:1.6}
 a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
-.card{max-width:40rem;margin:auto;background:#12161f;border:1px solid #243044;border-radius:12px;padding:1.5rem}</style></head>
+.card{max-width:42rem;margin:auto;background:#12161f;border:1px solid #243044;border-radius:12px;padding:1.5rem}</style></head>
 <body><div class="card"><h1>سینماگرافی Next</h1>
-<p>scaffold + F2Media. production روی <code>cmplugin.ir</code> دست نخورده.</p>
-<ul><li><a href="/manifest.json">manifest.json</a></li><li><a href="/health">health</a></li>
-<li>F2: <code>F2MEDIA_BASEURL</code> در <code>.env</code></li></ul></div></body></html>`)
+<p>F2Media به‌صورت پیش‌فرض فعال است. production روی <code>cmplugin.ir</code> دست نخورده.</p>
+<ul>
+<li><a href="/manifest.json">manifest.json</a></li>
+<li><a href="/health">health</a></li>
+<li>تست جست‌وجو: <a href="/catalog/movie/f2media_movies/search=matrix.json"><code>/catalog/movie/f2media_movies/search=matrix.json</code></a></li>
+</ul></div></body></html>`)
   })
 
   app.get('/health', (_req, res) => {
-    res.json({ ok: true, service: 'cinemagraphy-next', version: process.env.ADDON_VERSION || '0.1.0', time: new Date().toISOString() })
+    const config = configFromEnv(process.env)
+    const enabled = listEnabledProviders(config).map((p) => p.key)
+    res.json({
+      ok: true,
+      service: 'cinemagraphy-next',
+      version: process.env.ADDON_VERSION || '0.1.2',
+      providers: enabled,
+      time: new Date().toISOString(),
+    })
   })
 
   app.get('/manifest.json', sendManifest)
@@ -81,29 +94,47 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
 
   async function catalogHandler(req, res) {
     const config = resolveConfig(req)
-    const { type, id } = req.params
-    const extra = parseExtra(req.params.extraArgs)
+    const type = req.params.type
+    // id may include trailing .json when matched by wildcard-style routes
+    let id = String(req.params.id || '').replace(/\.json$/i, '')
+    const extraRaw =
+      req.params.extraArgs ||
+      req.params[0] ||
+      (req.url.includes('/search=') ? req.url.split('/').pop() : '')
+    const extra = parseExtra(extraRaw)
     const search = extra.search ? String(extra.search) : ''
 
-    const m = String(id || '').match(/^([a-z0-9]+)_((movies|series))$/i)
-    if (!m || !search) {
+    log.info('catalog request', { type, id, extraRaw, search })
+
+    const m = id.match(/^([a-z0-9]+)_(movies|series)$/i)
+    if (!m) {
       res.json({ metas: [] })
       return
     }
+    if (!search) {
+      // search-required catalogs: empty without query is correct
+      res.json({ metas: [] })
+      return
+    }
+
     const providerKey = m[1].toLowerCase()
     const provider = getProvider(providerKey)
     if (!provider || !provider.isEnabled(config)) {
+      log.warn('catalog provider disabled or missing', { providerKey })
       res.json({ metas: [] })
       return
     }
 
     try {
-      const items = await provider.search(search, { config, timeoutMs: config.timeouts?.providerMs })
+      const items = await provider.search(search, {
+        config,
+        timeoutMs: config.timeouts?.providerMs || 15_000,
+      })
       const wantType = type === 'series' ? 'series' : 'movie'
       const metas = items
-        .filter((it) => !type || it.type === wantType || (wantType === 'movie' && it.type === 'movie'))
+        .filter((it) => it.type === wantType || (wantType === 'movie' && it.type !== 'series'))
         .map((it) => {
-          const itemId = it.internalId?.replace(new RegExp(`^cg:${providerKey}:`), '') || ''
+          const itemId = String(it.internalId || '').replace(new RegExp(`^cg:${providerKey}:`), '')
           return {
             id: toStremioProviderId(providerKey, itemId),
             type: it.type,
@@ -119,12 +150,16 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
     }
   }
 
+  // Multiple route shapes — Express param quirks with ".json"
   app.get('/catalog/:type/:id/:extraArgs.json', catalogHandler)
+  app.get('/catalog/:type/:id/:extraArgs', catalogHandler)
   app.get('/catalog/:type/:id.json', catalogHandler)
+  app.get('/catalog/:type/:id', catalogHandler)
 
   app.get('/meta/:type/:id.json', async (req, res) => {
     const config = resolveConfig(req)
-    const parsed = fromStremioProviderId(req.params.id)
+    const id = String(req.params.id || '').replace(/\.json$/i, '')
+    const parsed = fromStremioProviderId(id)
     if (!parsed) {
       res.json({ meta: null })
       return
@@ -141,9 +176,9 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
     }
     res.json({
       meta: {
-        id: req.params.id,
+        id,
         type: detail.type || req.params.type,
-        name: detail.title || req.params.id,
+        name: detail.title || id,
         releaseInfo: detail.year ? String(detail.year) : undefined,
       },
     })
@@ -151,7 +186,8 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
 
   app.get('/stream/:type/:id.json', async (req, res) => {
     const config = resolveConfig(req)
-    const parsed = fromStremioProviderId(req.params.id)
+    const id = String(req.params.id || '').replace(/\.json$/i, '')
+    const parsed = fromStremioProviderId(id)
     if (!parsed) {
       res.json({ streams: [] })
       return
@@ -177,7 +213,7 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
   })
 
   app.get('/debug/config', (req, res) => {
-    if (process.env.DEV_MODE !== '1') {
+    if (process.env.DEV_MODE !== '1' && process.env.NODE_ENV === 'production') {
       res.status(404).end()
       return
     }
