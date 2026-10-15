@@ -1,6 +1,7 @@
 /**
  * F2Media HTML parsers — independent implementation from observed public pages.
  * Search: GET /?s=query
+ * Detail paths observed: {id}/{slug-year} e.g. 11208/the-matrix-resurrections-2021
  */
 
 export function parseSearchHtml(html, baseUrl) {
@@ -29,6 +30,7 @@ export function parseSearchHtml(html, baseUrl) {
     const poster = extractImg(a.inner)
     const pagePath = pathFromUrl(abs, base)
     if (!pagePath || seen.has(pagePath)) continue
+    if (isNoisePath(pagePath)) continue
     seen.add(pagePath)
 
     results.push({
@@ -41,28 +43,6 @@ export function parseSearchHtml(html, baseUrl) {
     })
 
     if (results.length >= 40) break
-  }
-
-  if (results.length === 0) {
-    const hRe = /<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi
-    while ((m = hRe.exec(html)) !== null) {
-      const raw = stripTags(m[1]).trim()
-      if (!raw || isNoiseTitle(raw)) continue
-      const title = cleanTitle(raw)
-      const year = extractYear(title)
-      const type = inferType(raw)
-      const fakePath = `search-hit/${slugify(title)}`
-      if (seen.has(fakePath)) continue
-      seen.add(fakePath)
-      results.push({
-        itemId: encodePageId(fakePath),
-        title,
-        year: year || undefined,
-        type,
-        pagePath: fakePath,
-      })
-      if (results.length >= 20) break
-    }
   }
 
   return results
@@ -130,13 +110,40 @@ function isLikelyDetailUrl(abs, base) {
     if (u.origin !== b.origin) return false
     const path = u.pathname.replace(/\/+$/, '')
     if (!path) return false
-    if (/\/(genres|category|tag|person|profile|login|wp-admin|wp-content|wp-json)\b/i.test(path)) return false
+    if (
+      /\/(genres|category|tag|person|persons|profile|login|wp-admin|wp-content|wp-json|movies|series)\b/i.test(
+        path,
+      )
+    ) {
+      return false
+    }
     if (/\.(css|js|png|jpg|jpeg|webp|gif|svg|ico)(\?|$)/i.test(path)) return false
-    if (path.split('/').filter(Boolean).length < 1) return false
-    return true
+    const segs = path.split('/').filter(Boolean)
+    if (segs.length < 1) return false
+    // Prefer numeric post id paths: 11208/the-matrix-...
+    if (/^\d+$/.test(segs[0]) && segs.length >= 2) return true
+    // Or multi-segment slug with a year
+    if (segs.length >= 1 && /\b(19|20)\d{2}\b/.test(path)) return true
+    // Single short segment like "movies" / "persons" → reject
+    if (segs.length === 1 && segs[0].length < 20) return false
+    return segs.length >= 2
   } catch {
     return false
   }
+}
+
+function isNoisePath(pagePath) {
+  const p = String(pagePath).replace(/\/+$/, '').toLowerCase()
+  const first = p.split('/')[0]
+  if (
+    /^(movies|series|persons|person|genres|category|profile|login|250tmdb|tmdb|search)$/i.test(
+      first,
+    )
+  ) {
+    return true
+  }
+  if (/^\d+tmdb$/i.test(first)) return true
+  return false
 }
 
 function isPlayableOrDownloadUrl(abs) {
@@ -219,7 +226,16 @@ function inferType(text) {
 function isNoiseTitle(title) {
   const t = title.trim()
   if (t.length < 2 || t.length > 200) return true
-  return /^(صفحه|خانه|ورود|ثبت|جستجو|دسته‌|ژانر|home|login|search|menu|next|prev)/i.test(t)
+  if (
+    /^(صفحه|خانه|ورود|ثبت|جستجو|دسته‌|ژانر|فیلم\s*ها|سریال\s*ها|بازیگران|home|login|search|menu|next|prev)$/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  if (/^\d+\s*فیلم\s*برتر/i.test(t)) return true
+  if (/^250\s*فیلم/i.test(t)) return true
+  return false
 }
 
 function cleanTitle(t) {
@@ -235,8 +251,8 @@ function stripTags(s) {
   return String(s)
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
+    .replace(/&/g, '&')
+    .replace(/"/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, ' ')
     .trim()
@@ -245,12 +261,4 @@ function stripTags(s) {
 function match1(s, re) {
   const m = String(s).match(re)
   return m ? m[1] : null
-}
-
-function slugify(s) {
-  return String(s)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 80)
 }
