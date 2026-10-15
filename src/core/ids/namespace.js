@@ -1,6 +1,7 @@
 /**
  * Stable internal IDs. Client adapters map these to Stremio/Nuvio forms.
  * Internal: cg:{providerKey}:{opaqueItemId}
+ * Stremio series stream: ip{provider}___{itemId}:{season}:{episode}
  */
 
 const PREFIX = 'cg'
@@ -29,9 +30,23 @@ export function toStremioProviderId(providerKey, itemId) {
   return `ip${sanitizePart(providerKey)}___${String(itemId)}`
 }
 
+/**
+ * Parse Stremio id, including series episode suffix :season:episode
+ */
 export function fromStremioProviderId(stremioId) {
-  const s = String(stremioId || '')
+  let s = String(stremioId || '')
   if (!s.startsWith('ip')) return null
+
+  let season
+  let episode
+  // trailing :12:3 or :1:01
+  const epMatch = s.match(/:(\d+):(\d+)$/)
+  if (epMatch) {
+    season = Number(epMatch[1])
+    episode = Number(epMatch[2])
+    s = s.slice(0, -epMatch[0].length)
+  }
+
   const body = s.slice(2)
   const idx = body.indexOf('___')
   if (idx < 0) return null
@@ -43,9 +58,11 @@ export function fromStremioProviderId(stremioId) {
       providerKey,
       itemId: after.slice(0, restIdx),
       rest: after.slice(restIdx + 3),
+      season,
+      episode,
     }
   }
-  return { providerKey, itemId: after }
+  return { providerKey, itemId: after, season, episode }
 }
 
 function sanitizePart(value) {

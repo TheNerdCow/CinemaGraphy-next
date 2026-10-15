@@ -16,8 +16,8 @@ import {
   decodePageId,
 } from './parse.js'
 import { parseListingHtml, parseHomeRail } from './parse-listing.js'
+import { parseSeriesEpisodes } from './parse-series.js'
 import {
-  F2_CATALOGS,
   getCatalogById,
   toManifestCatalogs,
   catalogListUrl,
@@ -71,17 +71,13 @@ export function createF2MediaProvider(deps = {}) {
         if (!res.ok) return []
         const html = await res.text()
         const parsed = parseSearchHtml(html, base)
-        return enrichPosters(parsed, cinemeta, logger)
+        return enrichPosters(parsed, cinemeta)
       } catch (err) {
         logger.warn?.('f2media search failed', { message: err.message })
         return []
       }
     },
 
-    /**
-     * Browse editorial catalog.
-     * skip: Stremio offset (0, 16, 32…) → page = floor(skip/16)+1
-     */
     async browse(catalogId, ctx = {}) {
       const cat = getCatalogById(catalogId)
       if (!cat) return []
@@ -91,15 +87,13 @@ export function createF2MediaProvider(deps = {}) {
 
       try {
         let parsed = []
-        // First page: prefer homepage rail (fresh + matches site UI)
         if (page === 1 && cat.homeRail) {
           const homeRes = await http.get(base + '/', {
             timeoutMs: ctx.timeoutMs || 15_000,
             headers: { 'Accept-Language': 'fa-IR,fa;q=0.9,en;q=0.8' },
           })
           if (homeRes.ok) {
-            const homeHtml = await homeRes.text()
-            parsed = parseHomeRail(homeHtml, base, cat.homeRail)
+            parsed = parseHomeRail(await homeRes.text(), base, cat.homeRail)
           }
         }
         if (parsed.length === 0) {
@@ -108,26 +102,15 @@ export function createF2MediaProvider(deps = {}) {
             timeoutMs: ctx.timeoutMs || 15_000,
             headers: { 'Accept-Language': 'fa-IR,fa;q=0.9,en;q=0.8' },
           })
-          if (!res.ok) {
-            logger.warn?.('f2media browse non-OK', { status: res.status, url })
-            return []
-          }
-          const html = await res.text()
-          parsed = parseListingHtml(html, base)
+          if (!res.ok) return []
+          parsed = parseListingHtml(await res.text(), base)
         }
 
-        // Prefer matching type
-        parsed = parsed.filter((it) => it.type === cat.type || cat.id === 'f2media_coming_soon')
-
-        logger.info?.('f2media browse', {
-          catalogId,
-          page,
-          count: parsed.length,
-        })
-
-        // Light poster enrich (cap concurrency cost)
-        const items = await enrichPosters(parsed.slice(0, 24), cinemeta, logger)
-        return items
+        parsed = parsed.filter(
+          (it) => it.type === cat.type || cat.id === 'f2media_coming_soon',
+        )
+        logger.info?.('f2media browse', { catalogId, page, count: parsed.length })
+        return enrichPosters(parsed.slice(0, 24), cinemeta)
       } catch (err) {
         logger.warn?.('f2media browse failed', { message: err.message, catalogId })
         return []
@@ -144,15 +127,30 @@ export function createF2MediaProvider(deps = {}) {
         if (!res.ok) return null
         const html = await res.text()
         const meta = parseDetailMeta(html, base)
-        const streams = parseDetailStreams(html, base)
+        const isSeries =
+          type === 'series' || meta.type === 'series' || /\/series\//i.test(pagePath)
+
+        let streams = []
+        let episodes = []
+        let videos = []
+
+        if (isSeries) {
+          const parsed = parseSeriesEpisodes(html, base)
+          episodes = parsed.episodes
+          videos = parsed.videos
+          // flat streams still useful as fallback
+          streams = episodes.flatMap((e) => e.streams)
+        } else {
+          streams = parseDetailStreams(html, base)
+        }
 
         let enriched = null
         if (meta.imdb) {
-          enriched = await cinemeta.byImdb(meta.imdb, type || meta.type)
+          enriched = await cinemeta.byImdb(meta.imdb, isSeries ? 'series' : 'movie')
         }
         if (!enriched && meta.title) {
           const q = meta.year ? `${meta.title} ${meta.year}` : meta.title
-          enriched = await cinemeta.search(q, type || meta.type)
+          enriched = await cinemeta.search(q, isSeries ? 'series' : 'movie')
         }
 
         const imdb = meta.imdb || enriched?.imdb
@@ -162,7 +160,7 @@ export function createF2MediaProvider(deps = {}) {
         return {
           id: itemId,
           pagePath,
-          type: type || meta.type || enriched?.type || 'movie',
+          type: isSeries ? 'series' : 'movie',
           title: enriched?.name || meta.title,
           year: meta.year || (enriched?.year ? parseInt(String(enriched.year), 10) : undefined),
           imdb,
@@ -173,6 +171,8 @@ export function createF2MediaProvider(deps = {}) {
           imdbRating: enriched?.imdbRating,
           runtime: enriched?.runtime,
           streams,
+          episodes,
+          videos,
         }
       } catch (err) {
         logger.warn?.('f2media detail failed', { message: err.message })
@@ -180,15 +180,30 @@ export function createF2MediaProvider(deps = {}) {
       }
     },
 
-    async getStreams(detail) {
+    async getStreams(detail, videoCtx = null) {
+      const season = videoCtx?.season
+      const episode = videoCtx?.episode
+
+      if (detail?.type === 'series' && season != null && episode != null) {
+        const ep = (detail.episodes || []).find(
+          (e) => e.season === Number(season) && e.episode === Number(episode),
+        )
+        if (!ep?.streams?.length) return []
+        return ep.streams.map((s) => ({
+          url: s.url,
+          name: s.badge || 'HD',
+          title: s.label,
+          quality: s.quality,
+          providerKey: 'f2media',
+        }))
+      }
+
       if (!detail?.streams?.length) return []
       return detail.streams.map((s) => ({
         url: s.url,
         name: s.badge || 'HD',
         title: s.label,
         quality: s.quality,
-        size: s.size,
-        audio: s.audio,
         providerKey: 'f2media',
       }))
     },
@@ -205,7 +220,7 @@ export function createF2MediaProvider(deps = {}) {
   }
 }
 
-async function enrichPosters(parsed, cinemeta, logger) {
+async function enrichPosters(parsed, cinemeta) {
   return Promise.all(
     parsed.map(async (item) => {
       let poster = item.poster
@@ -235,4 +250,3 @@ async function enrichPosters(parsed, cinemeta, logger) {
 }
 
 export default createF2MediaProvider
-export { F2_CATALOGS }

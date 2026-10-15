@@ -17,7 +17,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.2.0'
+const VERSION = process.env.ADDON_VERSION || '0.2.1'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -59,6 +59,7 @@ function createApp() {
       capabilities: p.capabilities,
     }))
     const manifest = buildStremioManifest(config, providers)
+    // Prefer FA short catalog names without client-looking suffixes in our own data
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     res.setHeader('Cache-Control', 'public, max-age=30')
     res.json(manifest)
@@ -69,15 +70,10 @@ function createApp() {
 <html lang="fa" dir="rtl"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>CinemaGraphy Next</title>
 <style>body{font-family:system-ui,sans-serif;background:#0b0d12;color:#e8eaef;margin:0;padding:2rem;line-height:1.6}
-a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
-.card{max-width:42rem;margin:auto;background:#12161f;border:1px solid #243044;border-radius:12px;padding:1.5rem}</style></head>
+a{color:#6ea8ff}.card{max-width:42rem;margin:auto;background:#12161f;border:1px solid #243044;border-radius:12px;padding:1.5rem}</style></head>
 <body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
-<p>F2Media browse catalogs + search/stream.</p>
-<ul>
-<li><a href="/manifest.json">manifest</a></li>
-<li><a href="/health">health</a></li>
-<li><a href="/catalog/movie/f2media_movies_updated.json">کاتالوگ فیلم‌های به‌روز</a></li>
-</ul></div></body></html>`)
+<p>سریال با قسمت‌بندی + کاتالوگ browse.</p>
+<ul><li><a href="/manifest.json">manifest</a></li><li><a href="/health">health</a></li></ul></div></body></html>`)
   })
 
   app.get('/health', (_req, res) => {
@@ -110,7 +106,6 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
 
     log.info('catalog request', { type, id, search: search || undefined, skip })
 
-    // Search catalogs: f2media_movies / f2media_series
     const searchMatch = id.match(/^([a-z0-9]+)_(movies|series)$/i)
     if (searchMatch && search) {
       const providerKey = searchMatch[1].toLowerCase()
@@ -133,15 +128,9 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
       return
     }
 
-    // Browse catalogs: f2media_movies_updated, f2media_turkish, …
     if (id.startsWith('f2media_') && !search) {
       const provider = getProvider('f2media')
-      if (!provider?.browse || !provider.isEnabled(config)) {
-        res.json({ metas: [] })
-        return
-      }
-      // streams-only mode: no browse catalogs
-      if (config.mode === 'streams') {
+      if (!provider?.browse || !provider.isEnabled(config) || config.mode === 'streams') {
         res.json({ metas: [] })
         return
       }
@@ -208,20 +197,31 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
       res.json({ meta: null })
       return
     }
-    res.json({
-      meta: {
-        id,
-        type: detail.type || req.params.type,
-        name: detail.title || id,
-        poster: detail.poster,
-        background: detail.background || detail.poster,
-        description: detail.description,
-        releaseInfo: detail.year ? String(detail.year) : undefined,
-        genres: detail.genres,
-        imdbRating: detail.imdbRating,
-        runtime: detail.runtime,
-      },
-    })
+
+    const metaId = toStremioProviderId(parsed.providerKey, parsed.itemId)
+    const meta = {
+      id: metaId,
+      type: detail.type || req.params.type,
+      name: detail.title || id,
+      poster: detail.poster,
+      background: detail.background || detail.poster,
+      description: detail.description,
+      releaseInfo: detail.year ? String(detail.year) : undefined,
+      genres: detail.genres,
+      imdbRating: detail.imdbRating,
+      runtime: detail.runtime,
+    }
+
+    if (detail.type === 'series' && detail.videos?.length) {
+      meta.videos = detail.videos.map((v) => ({
+        id: `${metaId}:${v.season}:${v.episode}`,
+        title: v.title || `S${v.season}E${v.episode}`,
+        season: v.season,
+        episode: v.episode,
+      }))
+    }
+
+    res.json({ meta })
   })
 
   app.get('/stream/:type/:id.json', async (req, res) => {
@@ -242,7 +242,10 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
       res.json({ streams: [] })
       return
     }
-    const streams = await provider.getStreams(detail, null, { config })
+    const streams = await provider.getStreams(detail, {
+      season: parsed.season,
+      episode: parsed.episode,
+    })
     res.json({
       streams: (streams || []).map((s) => ({
         name: s.name || s.quality || 'HD',
