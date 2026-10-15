@@ -1,10 +1,10 @@
 /**
  * F2Media provider — clean-room adapter.
- * On by default (public site); set F2MEDIA_BASEURL= to override host, or providers.f2media.enabled=false to disable.
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
 import { createHttpClient } from '../../core/http/client.js'
+import { createCinemetaClient } from '../../core/meta/cinemeta.js'
 import {
   parseSearchHtml,
   parseDetailStreams,
@@ -17,6 +17,7 @@ const DEFAULT_BASE = 'https://www.film2med.top'
 export function createF2MediaProvider(deps = {}) {
   const http = deps.http || createHttpClient()
   const logger = deps.logger || console
+  const cinemeta = deps.cinemeta || createCinemetaClient({ http })
 
   return {
     key: 'f2media',
@@ -35,7 +36,6 @@ export function createF2MediaProvider(deps = {}) {
       if (config.providersEnabled?.length) {
         return config.providersEnabled.includes('f2media')
       }
-      // Default ON — public provider; disable explicitly if needed
       return true
     },
 
@@ -73,7 +73,7 @@ export function createF2MediaProvider(deps = {}) {
           externalRefs: { pagePath: item.pagePath },
         }))
       } catch (err) {
-        logger.warn?.('f2media search failed', { message: err.message, code: err.code, url })
+        logger.warn?.('f2media search failed', { message: err.message, code: err.code })
         return []
       }
     },
@@ -87,15 +87,31 @@ export function createF2MediaProvider(deps = {}) {
         const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 15_000 })
         if (!res.ok) return null
         const html = await res.text()
-        const meta = parseDetailMeta(html)
+        const meta = parseDetailMeta(html, base)
         const streams = parseDetailStreams(html, base)
+
+        let enriched = null
+        if (meta.imdb) {
+          enriched = await cinemeta.byImdb(meta.imdb, type || meta.type)
+        }
+        if (!enriched && meta.title) {
+          const q = meta.year ? `${meta.title} ${meta.year}` : meta.title
+          enriched = await cinemeta.search(q, type || meta.type)
+        }
+
         return {
           id: itemId,
           pagePath,
-          type: type || meta.type || 'movie',
-          title: meta.title,
-          year: meta.year,
-          imdb: meta.imdb,
+          type: type || meta.type || enriched?.type || 'movie',
+          title: enriched?.name || meta.title,
+          year: meta.year || (enriched?.year ? parseInt(String(enriched.year), 10) : undefined),
+          imdb: meta.imdb || enriched?.imdb,
+          poster: meta.poster || enriched?.poster,
+          background: enriched?.background || meta.poster || enriched?.poster,
+          description: meta.description || enriched?.description,
+          genres: enriched?.genres,
+          imdbRating: enriched?.imdbRating,
+          runtime: enriched?.runtime,
           streams,
         }
       } catch (err) {
@@ -108,7 +124,7 @@ export function createF2MediaProvider(deps = {}) {
       if (!detail?.streams?.length) return []
       return detail.streams.map((s) => ({
         url: s.url,
-        title: [s.quality, s.size, s.label].filter(Boolean).join(' · ') || 'F2Media',
+        title: s.label || [s.quality, s.size, 'دانلود مستقیم'].filter(Boolean).join(' · '),
         quality: s.quality,
         size: s.size,
         providerKey: 'f2media',

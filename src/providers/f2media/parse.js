@@ -1,7 +1,7 @@
 /**
  * F2Media HTML parsers — independent implementation from observed public pages.
  * Search: GET /?s=query
- * Detail paths observed: {id}/{slug-year} e.g. 11208/the-matrix-resurrections-2021
+ * Detail paths: {id}/{slug-year} e.g. 11208/the-matrix-resurrections-2021
  */
 
 export function parseSearchHtml(html, baseUrl) {
@@ -27,7 +27,8 @@ export function parseSearchHtml(html, baseUrl) {
 
     const year = extractYear(a.inner) || extractYear(title)
     const type = inferType(a.inner + ' ' + title + ' ' + abs)
-    const poster = extractImg(a.inner)
+    let poster = extractImg(a.inner)
+    if (poster) poster = resolveUrl(base, poster) || poster
     const pagePath = pathFromUrl(abs, base)
     if (!pagePath || seen.has(pagePath)) continue
     if (isNoisePath(pagePath)) continue
@@ -62,28 +63,60 @@ export function parseDetailStreams(html, baseUrl) {
     if (!isPlayableOrDownloadUrl(abs)) continue
     if (seen.has(abs)) continue
     seen.add(abs)
-    const quality = extractQuality(inner + ' ' + abs)
-    const size = extractSize(inner)
+
+    // Context around the link often has size/quality
+    const idx = html.indexOf(href)
+    const ctx = idx >= 0 ? stripTags(html.slice(Math.max(0, idx - 80), idx + href.length + 120)) : inner
+    const blob = `${inner} ${ctx} ${abs}`
+
+    const quality = extractQuality(blob)
+    const size = extractSize(blob)
     out.push({
       url: abs,
       quality: quality || undefined,
       size: size || undefined,
-      label: inner.slice(0, 120) || quality || 'stream',
+      label: formatStreamLabel(quality, size, inner),
     })
     if (out.length >= 50) break
   }
+
+  // Prefer higher quality first
+  const rank = (q) => {
+    const n = parseInt(String(q || '').replace(/\D/g, ''), 10)
+    return Number.isFinite(n) ? n : 0
+  }
+  out.sort((a, b) => rank(b.quality) - rank(a.quality))
   return out
 }
 
-export function parseDetailMeta(html) {
+export function parseDetailMeta(html, baseUrl) {
+  const base = String(baseUrl || '').replace(/\/+$/, '')
   const title =
     match1(html, /property=["']og:title["'][^>]*content=["']([^"']+)["']/i) ||
     match1(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i)
   const clean = title ? cleanTitle(stripTags(title)) : undefined
-  const year = clean ? extractYear(clean) : extractYear(html.slice(0, 5000))
+  const year = clean ? extractYear(clean) : extractYear(html.slice(0, 8000))
   const imdb = match1(html, /imdb\.com\/title\/(tt\d+)/i)
   const type = inferType(html.slice(0, 8000) + ' ' + (clean || ''))
-  return { title: clean, year: year || undefined, imdb: imdb || undefined, type }
+
+  let poster =
+    match1(html, /property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
+    match1(html, /name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i)
+  if (poster) poster = resolveUrl(base, poster) || poster
+
+  let description =
+    match1(html, /property=["']og:description["'][^>]*content=["']([^"']+)["']/i) ||
+    match1(html, /name=["']description["'][^>]*content=["']([^"']+)["']/i)
+  if (description) description = stripTags(description).slice(0, 1200)
+
+  return {
+    title: clean,
+    year: year || undefined,
+    imdb: imdb || undefined,
+    type,
+    poster: poster || undefined,
+    description: description || undefined,
+  }
 }
 
 export function encodePageId(pagePath) {
@@ -103,6 +136,18 @@ export function decodePageId(itemId) {
   }
 }
 
+function formatStreamLabel(quality, size, inner) {
+  const parts = []
+  if (quality) parts.push(quality)
+  if (size) parts.push(size)
+  if (!parts.length && inner) {
+    const short = inner.replace(/\s+/g, ' ').slice(0, 60)
+    if (short) parts.push(short)
+  }
+  parts.push('دانلود مستقیم')
+  return parts.join(' · ')
+}
+
 function isLikelyDetailUrl(abs, base) {
   try {
     const u = new URL(abs)
@@ -120,11 +165,8 @@ function isLikelyDetailUrl(abs, base) {
     if (/\.(css|js|png|jpg|jpeg|webp|gif|svg|ico)(\?|$)/i.test(path)) return false
     const segs = path.split('/').filter(Boolean)
     if (segs.length < 1) return false
-    // Prefer numeric post id paths: 11208/the-matrix-...
     if (/^\d+$/.test(segs[0]) && segs.length >= 2) return true
-    // Or multi-segment slug with a year
     if (segs.length >= 1 && /\b(19|20)\d{2}\b/.test(path)) return true
-    // Single short segment like "movies" / "persons" → reject
     if (segs.length === 1 && segs[0].length < 20) return false
     return segs.length >= 2
   } catch {
@@ -213,8 +255,8 @@ function extractQuality(text) {
 }
 
 function extractSize(text) {
-  const m = String(text).match(/\b(\d+(?:\.\d+)?\s*(?:GB|MB|گیگ|مگ))\b/i)
-  return m ? m[1] : null
+  const m = String(text).match(/\b(\d+(?:\.\d+)?\s*(?:GB|MB|گیگ|مگ|گیگابایت|مگابایت))\b/i)
+  return m ? m[1].replace(/گیگابایت/i, 'GB').replace(/مگابایت/i, 'MB').replace(/گیگ/i, 'GB').replace(/مگ/i, 'MB') : null
 }
 
 function inferType(text) {
@@ -251,8 +293,8 @@ function stripTags(s) {
   return String(s)
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
-    .replace(/&/g, '&')
-    .replace(/"/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, ' ')
     .trim()

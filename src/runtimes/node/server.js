@@ -5,7 +5,7 @@
 import cors from 'cors'
 import express from 'express'
 import { loadEnvFile } from './load-env.js'
-import { configFromEnv, decodeUserConfig, applyMode, redactSecrets } from '../../core/config/app-config.js'
+import { configFromEnv, decodeUserConfig, applyMode } from '../../core/config/app-config.js'
 import { createLogger } from '../../core/logging/logger.js'
 import { buildStremioManifest } from '../../clients/stremio/manifest.js'
 import { registerProvider, listEnabledProviders, getProvider } from '../../providers/registry.js'
@@ -13,12 +13,11 @@ import { stubExampleProvider } from '../../providers/stub-example.js'
 import { createF2MediaProvider } from '../../providers/f2media/index.js'
 import { fromStremioProviderId, toStremioProviderId } from '../../core/ids/namespace.js'
 
-// Optional — no error if .env does not exist
 loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.1.3'
+const VERSION = process.env.ADDON_VERSION || '0.1.4'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -73,7 +72,7 @@ function createApp() {
 a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
 .card{max-width:42rem;margin:auto;background:#12161f;border:1px solid #243044;border-radius:12px;padding:1.5rem}</style></head>
 <body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
-<p>F2Media پیش‌فرض فعال. فایل <code>.env</code> اختیاری است.</p>
+<p>F2Media + Cinemeta meta. فایل <code>.env</code> اختیاری است.</p>
 <ul>
 <li><a href="/manifest.json">manifest.json</a></li>
 <li><a href="/health">health</a></li>
@@ -107,7 +106,7 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
     const extra = parseExtra(extraRaw)
     const search = extra.search ? String(extra.search) : ''
 
-    log.info('catalog request', { type, id, extraRaw, search })
+    log.info('catalog request', { type, id, search })
 
     const m = id.match(/^([a-z0-9]+)_(movies|series)$/i)
     if (!m || !search) {
@@ -118,7 +117,6 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
     const providerKey = m[1].toLowerCase()
     const provider = getProvider(providerKey)
     if (!provider || !provider.isEnabled(config)) {
-      log.warn('catalog provider disabled or missing', { providerKey })
       res.json({ metas: [] })
       return
     }
@@ -176,7 +174,13 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
         id,
         type: detail.type || req.params.type,
         name: detail.title || id,
+        poster: detail.poster,
+        background: detail.background || detail.poster,
+        description: detail.description,
         releaseInfo: detail.year ? String(detail.year) : undefined,
+        genres: detail.genres,
+        imdbRating: detail.imdbRating,
+        runtime: detail.runtime,
       },
     })
   })
@@ -202,8 +206,8 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
     const streams = await provider.getStreams(detail, null, { config })
     res.json({
       streams: (streams || []).map((s) => ({
-        name: s.quality || 'F2',
-        title: s.title,
+        name: s.quality ? `${s.quality}` : 'F2Media',
+        title: s.title || [s.quality, s.size, 'دانلود مستقیم'].filter(Boolean).join(' · '),
         url: s.url,
       })),
     })
