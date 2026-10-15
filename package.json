@@ -1,19 +1,16 @@
 {
   "name": "cinemagraphy-next",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Independent modular CinemaGraphy rewrite (Stremio/Nuvio). Clean-room — not a fork of production.",
-  "engines": {
-    "node": ">=20"
-  },
+  "engines": { "node": ">=20" },
   "scripts": {
     "start": "node src/runtimes/node/server.js",
     "dev": "node --watch src/runtimes/node/server.js",
-    "test": "node --test tests/unit/*.test.js",
-    "check": "node --check src/runtimes/node/server.js && node --check src/clients/stremio/manifest.js"
+    "test": "node --test tests/unit/*.test.js tests/providers/*.test.js",
+    "check": "node --check src/runtimes/node/server.js"
   },
-  "keywords": ["stremio", "nuvio", "addon", "iran"],
   "license": "ISC",
   "dependencies": {
     "cors": "^2.8.5",
