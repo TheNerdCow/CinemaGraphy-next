@@ -4,30 +4,19 @@
 
 ## Completed
 
-- [x] Stage 0 — REFERENCE_AUDIT.md  
-- [x] Stage 0 — FEATURE_PARITY.md  
-- [x] Stage 0 — UNKNOWNS.md  
-- [x] Stage 1 — ARCHITECTURE.md (modular, streams-only mode, deep personalization)
-- [x] GitHub repo created: TheNerdCow/CinemaGraphy-next (independent, private)
+- [x] Stage 0 audit docs
+- [x] Stage 1 ARCHITECTURE.md
+- [x] Repo TheNerdCow/CinemaGraphy-next
+- [x] Scaffold 0.1.0: Core (config modes full/streams/catalogs, SSRF, cache, ids), Stremio manifest builder, Node runtime, 14 unit tests passing
 
-## In progress / next
+## Next
 
-- [ ] Scaffold package.json + Core (models, AppConfig, modes, HttpClient+SSRF, memory Cache)  
-- [ ] StremioAdapter: manifest for full vs streams-only  
-- [ ] Provider #1 (f2media) + fixtures  
-- [ ] Node runtime smoke  
-- [ ] Web: configure page with mode + provider toggles  
+- [ ] Real provider #1 (f2media) with fixtures
+- [ ] Catalog/meta/stream handlers wired to registry
+- [ ] Configure page (mode + provider toggles)
+- [ ] Cloudflare runtime adapter
 
-## Hard rules still in force
+## Rules
 
-- No changes to live cmplugin.ir / production master (TheNerdCow/CinemaGraphy)  
-- No code copied from reference implementation  
-- No deployment to production  
-- Secrets never committed  
-
-## Repos
-
-| Repo | Role |
-|------|------|
-| https://github.com/TheNerdCow/CinemaGraphy | Production / reference (do not break) |
-| https://github.com/TheNerdCow/CinemaGraphy-next | Independent rewrite (this project) |
+- Production TheNerdCow/CinemaGraphy and cmplugin.ir untouched
+- No code copied from reference
