@@ -1,40 +1,53 @@
 # CinemaGraphy-next
 
-**Independent modular rewrite** of [CinemaGraphy](https://github.com/TheNerdCow/CinemaGraphy) (Stremio / Nuvio addon).
+**Independent modular rewrite** of [CinemaGraphy](https://github.com/TheNerdCow/CinemaGraphy).
 
-> This is a **clean-room** project with a new git history.  
-> It is **not** a fork and does **not** replace production (`cmplugin.ir` / `TheNerdCow/CinemaGraphy`) until feature parity is proven.
+Clean-room · new git history · **does not** replace production (`cmplugin.ir`).
 
-## Status
+## Status: scaffold `0.1.0`
 
-| Stage | State |
-|-------|--------|
-| 0 — Reference audit | Done |
-| 1 — Architecture | Done |
-| 2+ — Implementation | Not started |
+| Area | State |
+|------|--------|
+| Core config (`full` / `streams` / `catalogs`) | Done |
+| SSRF-safe HTTP client | Done |
+| Internal IDs + Stremio id mapping | Done |
+| Stremio manifest builder | Done |
+| Provider registry + stub | Done |
+| Node runtime (`/manifest.json`, `/health`) | Done |
+| Unit tests | **14 passing** |
+| Real Iranian providers | Not yet |
+| Cloudflare / configure UI | Not yet |
 
-## Where to read the design
+## Docs
 
-| Document | Path |
-|----------|------|
-| **Architecture (start here)** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| Reference behavioural audit | [`docs/REFERENCE_AUDIT.md`](docs/REFERENCE_AUDIT.md) |
-| Feature parity matrix | [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md) |
-| Open unknowns | [`docs/UNKNOWNS.md`](docs/UNKNOWNS.md) |
-| Progress checkpoint | [`docs/PROGRESS.md`](docs/PROGRESS.md) |
+- [Architecture](docs/ARCHITECTURE.md)
+- [Feature parity](docs/FEATURE_PARITY.md)
+- [Reference audit](docs/REFERENCE_AUDIT.md)
+- [Progress](docs/PROGRESS.md)
 
-## Design highlights
+## Local run
 
-- **Modular layers:** Core → Providers → Client adapters (Stremio / Nuvio) → Runtimes (Node / Cloudflare / Docker) → Web
-- **Personalization:** `full` | `streams` (sources only, no catalogs) | `catalogs` modes; per-provider toggles; optional external catalogs
-- **No mandatory API key** for base streaming (Cinemeta first; TMDB optional)
-- **Clean-room:** reference repo used only for behaviour discovery, not code copy
+```bash
+git clone https://github.com/TheNerdCow/CinemaGraphy-next.git
+cd CinemaGraphy-next
+npm install
+cp .env.example .env
+npm test
+npm start
+# http://127.0.0.1:7000/manifest.json
+```
+
+Streams-only mode:
+
+```bash
+ADDON_MODE=streams npm start
+```
 
 ## Production (unchanged)
 
-- Live addon: https://cmplugin.ir  
-- Reference source: https://github.com/TheNerdCow/CinemaGraphy  
+- https://cmplugin.ir  
+- https://github.com/TheNerdCow/CinemaGraphy  
 
 ## License
 
-ISC (same family as the reference project; independent implementation).
+ISC
