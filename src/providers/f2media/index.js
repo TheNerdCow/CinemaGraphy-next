@@ -63,16 +63,41 @@ export function createF2MediaProvider(deps = {}) {
         if (!res.ok) return []
         const html = await res.text()
         const parsed = parseSearchHtml(html, base)
-        logger.info?.('f2media search', { q, count: parsed.length })
-        return parsed.map((item) => ({
-          internalId: makeInternalId('f2media', item.itemId),
-          type: item.type,
-          title: item.title,
-          year: item.year,
-          poster: item.poster,
-          providerKey: 'f2media',
-          externalRefs: { pagePath: item.pagePath },
-        }))
+
+        // Enrich posters via Cinemeta (metahub) — site CDNs often blocked in IR
+        const enriched = await Promise.all(
+          parsed.slice(0, 20).map(async (item) => {
+            let poster = item.poster
+            let imdb
+            try {
+              const q2 = item.year ? `${item.title} ${item.year}` : item.title
+              const cm = await cinemeta.search(q2, item.type)
+              if (cm?.imdb) {
+                imdb = cm.imdb
+                poster = metahubPoster(cm.imdb) || cm.poster || poster
+              }
+            } catch {
+              /* ignore */
+            }
+            return {
+              internalId: makeInternalId('f2media', item.itemId),
+              type: item.type,
+              title: item.title,
+              year: item.year,
+              poster,
+              imdb,
+              providerKey: 'f2media',
+              externalRefs: { pagePath: item.pagePath },
+            }
+          }),
+        )
+
+        logger.info?.('f2media search', {
+          q,
+          count: enriched.length,
+          withPoster: enriched.filter((x) => x.poster).length,
+        })
+        return enriched
       } catch (err) {
         logger.warn?.('f2media search failed', { message: err.message })
         return []
@@ -101,11 +126,8 @@ export function createF2MediaProvider(deps = {}) {
         }
 
         const imdb = meta.imdb || enriched?.imdb
-        // Always prefer metahub posters (IR-friendly vs site CDN / schema)
-        const poster =
-          metahubPoster(imdb) || enriched?.poster || meta.poster
-        const background =
-          metahubBackground(imdb) || enriched?.background || poster
+        const poster = metahubPoster(imdb) || enriched?.poster || meta.poster
+        const background = metahubBackground(imdb) || enriched?.background || poster
 
         return {
           id: itemId,

@@ -1,5 +1,5 @@
 /**
- * F2Media parsers — real page structure (download-list, schema only as last resort).
+ * F2Media parsers — real page structure (download-list).
  */
 
 export function parseSearchHtml(html, baseUrl) {
@@ -95,6 +95,7 @@ export function parseDetailStreams(html, baseUrl) {
         encoder,
         isAudioOnly,
         providerName: 'F2Media',
+        providerEmoji: '🎬',
       }
 
       out.push({
@@ -118,6 +119,7 @@ export function parseDetailStreams(html, baseUrl) {
         ...fromUrl,
         isAudioOnly: /\.(mka|aac|mp3)(\?|$)/i.test(abs),
         providerName: 'F2Media',
+        providerEmoji: '🎬',
       }
       out.push({
         url: abs,
@@ -147,7 +149,6 @@ export function parseDetailMeta(html, baseUrl) {
   const imdb = match1(html, /imdb\.com\/title\/(tt\d+)/i)
   const type = inferType(html.slice(0, 12000) + ' ' + (clean || ''))
 
-  // Site posters often blocked/broken — keep only as last-resort candidate
   let poster =
     match1(html, /"thumbnailUrl"\s*:\s*"(https?:[^"\\]+)"/i) ||
     match1(html, /"contentUrl"\s*:\s*"(https?:[^"\\]+\.(?:jpg|jpeg|png|webp)[^"\\]*)"/i)
@@ -156,8 +157,7 @@ export function parseDetailMeta(html, baseUrl) {
     if (/public_html|film2med\.top\/jpeg/i.test(poster)) poster = undefined
   }
 
-  let description =
-    match1(html, /"description"\s*:\s*"((?:\\.|[^"\\])+)"/i)
+  let description = match1(html, /"description"\s*:\s*"((?:\\.|[^"\\])+)"/i)
   if (description) {
     description = stripTags(decodeHtml(description)).slice(0, 1500)
     if (isSpamDescription(description)) description = undefined
@@ -190,7 +190,6 @@ export function decodePageId(itemId) {
   }
 }
 
-/** Short badge for stream.name — no emoji, no repeat */
 export function qualityBadge(quality) {
   const q = String(quality || '')
   if (/2160|4K/i.test(q)) return '4K'
@@ -202,21 +201,21 @@ export function qualityBadge(quality) {
 }
 
 /**
- * Multi-line professional stream card for Stremio/Nuvio title field.
+ * Labeled multi-line stream card (Stremio/Nuvio title).
  *
- * 🟣 F2Media
- * 2160p · HDR · 10bit · BluRay · x265
- * 📝 زیرنویس چسبیده
- * 📦 12.4 GB · PSA
+ * 🎬 منبع: F2Media
+ * 📊 کیفیت: 2160p · HDR · 10bit · BluRay · x265
+ * 📝 زیرنویس: زیرنویس چسبیده فارسی
+ * 🎧 دوبله: دوبله فارسی
+ * 🎞️ انکدر: PSA
+ * 📦 سایز: 12.4 GB
  */
 export function formatStreamLabel(info = {}) {
   const lines = []
-
-  // Line 1 — source (emoji = provider identity)
+  const emoji = info.providerEmoji || '🎬'
   const provider = info.providerName || 'F2Media'
-  lines.push(`🟣 ${provider}`)
+  lines.push(`${emoji} منبع: ${provider}`)
 
-  // Line 2 — technical quality stack (no leading 4K badge — that's stream.name)
   const tech = []
   if (info.quality) {
     const q = String(info.quality)
@@ -227,19 +226,23 @@ export function formatStreamLabel(info = {}) {
   if (info.bit10) tech.push('10bit')
   if (info.source) tech.push(info.source)
   if (info.codec) tech.push(info.codec)
-  if (tech.length) lines.push(tech.join(' · '))
+  if (tech.length) lines.push(`📊 کیفیت: ${tech.join(' · ')}`)
 
-  // Line 3 — audio / subtitles
-  if (info.audio === 'dub') lines.push('🎧 دوبله فارسی')
-  else if (info.audio === 'sub') lines.push('📝 زیرنویس چسبیده')
-  else if (info.audio) lines.push(String(info.audio))
+  if (info.audio === 'sub') {
+    lines.push('📝 زیرنویس: زیرنویس چسبیده فارسی')
+  } else if (info.audio === 'dub') {
+    lines.push('🎧 دوبله: دوبله فارسی')
+  }
 
-  // Line 4 — size then encoder
-  const tail = []
-  if (info.size) tail.push(`📦 ${info.size}`)
-  if (info.encoder && !/^unknown$/i.test(info.encoder)) tail.push(info.encoder)
-  if (info.isAudioOnly) tail.push('🔊 فقط صدا')
-  if (tail.length) lines.push(tail.join(' · '))
+  if (info.encoder && !/^unknown$/i.test(info.encoder)) {
+    lines.push(`🎞️ انکدر: ${info.encoder}`)
+  }
+
+  if (info.size) {
+    lines.push(`📦 سایز: ${info.size}`)
+  }
+
+  if (info.isAudioOnly) lines.push('🔊 فقط صدا')
 
   return lines.join('\n')
 }

@@ -17,7 +17,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.1.6'
+const VERSION = process.env.ADDON_VERSION || '0.1.7'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -72,7 +72,7 @@ function createApp() {
 a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
 .card{max-width:42rem;margin:auto;background:#12161f;border:1px solid #243044;border-radius:12px;padding:1.5rem}</style></head>
 <body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
-<p>استریم چندخطی + پوستر metahub.</p>
+<p>پوستر سرچ + استریم برچسب‌دار.</p>
 <ul><li><a href="/manifest.json">manifest</a></li><li><a href="/health">health</a></li></ul></div></body></html>`)
   })
 
@@ -199,9 +199,7 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
     const streams = await provider.getStreams(detail, null, { config })
     res.json({
       streams: (streams || []).map((s) => ({
-        // Big badge — quality only (no emoji, no duplicate)
         name: s.name || s.quality || 'HD',
-        // Multi-line details
         title: s.title,
         url: s.url,
       })),
