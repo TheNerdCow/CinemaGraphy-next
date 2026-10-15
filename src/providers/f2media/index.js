@@ -62,7 +62,7 @@ export function createF2MediaProvider(deps = {}) {
         }
         const html = await res.text()
         const parsed = parseSearchHtml(html, base)
-        logger.info?.('f2media search', { q, count: parsed.length, htmlLen: html.length })
+        logger.info?.('f2media search', { q, count: parsed.length })
         return parsed.map((item) => ({
           internalId: makeInternalId('f2media', item.itemId),
           type: item.type,
@@ -73,7 +73,7 @@ export function createF2MediaProvider(deps = {}) {
           externalRefs: { pagePath: item.pagePath },
         }))
       } catch (err) {
-        logger.warn?.('f2media search failed', { message: err.message, code: err.code })
+        logger.warn?.('f2media search failed', { message: err.message })
         return []
       }
     },
@@ -90,6 +90,7 @@ export function createF2MediaProvider(deps = {}) {
         const meta = parseDetailMeta(html, base)
         const streams = parseDetailStreams(html, base)
 
+        // Cinemeta first for plot / poster / rating (site descriptions are SEO spam)
         let enriched = null
         if (meta.imdb) {
           enriched = await cinemeta.byImdb(meta.imdb, type || meta.type)
@@ -106,9 +107,10 @@ export function createF2MediaProvider(deps = {}) {
           title: enriched?.name || meta.title,
           year: meta.year || (enriched?.year ? parseInt(String(enriched.year), 10) : undefined),
           imdb: meta.imdb || enriched?.imdb,
-          poster: meta.poster || enriched?.poster,
-          background: enriched?.background || meta.poster || enriched?.poster,
-          description: meta.description || enriched?.description,
+          poster: enriched?.poster || meta.poster,
+          background: enriched?.background || enriched?.poster || meta.poster,
+          // Always prefer Cinemeta plot when present
+          description: enriched?.description || meta.description,
           genres: enriched?.genres,
           imdbRating: enriched?.imdbRating,
           runtime: enriched?.runtime,
@@ -124,9 +126,10 @@ export function createF2MediaProvider(deps = {}) {
       if (!detail?.streams?.length) return []
       return detail.streams.map((s) => ({
         url: s.url,
-        title: s.label || [s.quality, s.size, 'دانلود مستقیم'].filter(Boolean).join(' · '),
+        title: s.label,
         quality: s.quality,
         size: s.size,
+        audio: s.audio,
         providerKey: 'f2media',
       }))
     },

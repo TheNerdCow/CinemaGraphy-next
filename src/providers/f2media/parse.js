@@ -1,7 +1,6 @@
 /**
- * F2Media HTML parsers — independent implementation from observed public pages.
- * Search: GET /?s=query
- * Detail paths: {id}/{slug-year} e.g. 11208/the-matrix-resurrections-2021
+ * F2Media parsers — based on real public page structure (download-list, schema.org).
+ * Streams: CDN mkv/mp4 URLs encode quality + DUB/SUB; list blocks have quality/encoder text.
  */
 
 export function parseSearchHtml(html, baseUrl) {
@@ -42,72 +41,152 @@ export function parseSearchHtml(html, baseUrl) {
       poster: poster || undefined,
       pagePath,
     })
-
     if (results.length >= 40) break
   }
-
   return results
 }
 
+/**
+ * Parse stream rows from F2Media detail pages.
+ * Prefer structured download-list blocks; fall back to CDN media links.
+ */
 export function parseDetailStreams(html, baseUrl) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const out = []
   const seen = new Set()
-  const aRe = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
-  let m
-  while ((m = aRe.exec(html)) !== null) {
-    const href = m[1]
-    const inner = stripTags(m[2]).trim()
-    const abs = resolveUrl(base, href)
-    if (!abs) continue
-    if (!isPlayableOrDownloadUrl(abs)) continue
-    if (seen.has(abs)) continue
-    seen.add(abs)
 
-    // Context around the link often has size/quality
-    const idx = html.indexOf(href)
-    const ctx = idx >= 0 ? stripTags(html.slice(Math.max(0, idx - 80), idx + href.length + 120)) : inner
-    const blob = `${inner} ${ctx} ${abs}`
-
-    const quality = extractQuality(blob)
-    const size = extractSize(blob)
-    out.push({
-      url: abs,
-      quality: quality || undefined,
-      size: size || undefined,
-      label: formatStreamLabel(quality, size, inner),
-    })
-    if (out.length >= 50) break
+  // Blocks: <div class="download-list dubbled|hardsub"> ... کیفیت ... دانلود مستقیم
+  const blockRe =
+    /<div[^>]+class=["'][^"']*download-list[^"']*["'][^>]*>([\s\S]*?)(?=<div[^>]+class=["'][^"']*download-list|$)\/div>/gi
+  let bm
+  const blocks = []
+  while ((bm = blockRe.exec(html)) !== null) {
+    blocks.push(bm[0])
+  }
+  // Simpler split if regex fails on nested divs
+  if (blocks.length === 0) {
+    const parts = html.split(/class=["'][^"']*download-list/i)
+    for (let i = 1; i < parts.length; i++) {
+      blocks.push('class="download-list' + parts[i].slice(0, 3500))
+    }
   }
 
-  // Prefer higher quality first
-  const rank = (q) => {
-    const n = parseInt(String(q || '').replace(/\D/g, ''), 10)
-    return Number.isFinite(n) ? n : 0
+  for (const block of blocks) {
+    const sectionAudio = /download-list\s+dubbled|دوبله/i.test(block)
+      ? 'dub'
+      : /download-list\s+hardsub|زیرنویس/i.test(block)
+        ? 'sub'
+        : null
+
+    const aRe = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
+    let am
+    while ((am = aRe.exec(block)) !== null) {
+      const href = decodeHtml(am[1])
+      const abs = resolveUrl(base, href)
+      if (!abs || !isPlayableOrDownloadUrl(abs)) continue
+      if (seen.has(abs)) continue
+      // skip pure audio tracks if we only want video — keep but mark
+      const isAudioOnly = /\.(mka|aac|mp3)(\?|$)/i.test(abs)
+      seen.add(abs)
+
+      const fromUrl = analyzeMediaUrl(abs)
+      const fromBlock = analyzeBlockText(block)
+      const quality = fromUrl.quality || fromBlock.quality
+      const size = fromBlock.size || fromUrl.size
+      const audio =
+        fromUrl.audio || sectionAudio || fromBlock.audio || null
+      const source = fromUrl.source || fromBlock.source
+      const codec = fromUrl.codec || fromBlock.codec
+      const hdr = fromUrl.hdr || fromBlock.hdr
+      const bit10 = fromUrl.bit10 || fromBlock.bit10
+      const encoder = fromBlock.encoder
+
+      out.push({
+        url: abs,
+        quality: quality || undefined,
+        size: size || undefined,
+        audio,
+        source,
+        codec,
+        hdr: Boolean(hdr),
+        bit10: Boolean(bit10),
+        encoder,
+        isAudioOnly,
+        label: formatStreamLabel({
+          quality,
+          size,
+          audio,
+          source,
+          codec,
+          hdr,
+          bit10,
+          encoder,
+          isAudioOnly,
+        }),
+      })
+    }
   }
-  out.sort((a, b) => rank(b.quality) - rank(a.quality))
-  return out
+
+  // Fallback: any CDN media link not already captured
+  if (out.length === 0) {
+    const aRe = /<a[^>]+href=["']([^"']+)["'][^>]*>/gi
+    let am
+    while ((am = aRe.exec(html)) !== null) {
+      const abs = resolveUrl(base, decodeHtml(am[1]))
+      if (!abs || !isPlayableOrDownloadUrl(abs) || seen.has(abs)) continue
+      seen.add(abs)
+      const fromUrl = analyzeMediaUrl(abs)
+      out.push({
+        url: abs,
+        quality: fromUrl.quality,
+        audio: fromUrl.audio,
+        source: fromUrl.source,
+        codec: fromUrl.codec,
+        hdr: fromUrl.hdr,
+        bit10: fromUrl.bit10,
+        isAudioOnly: /\.(mka|aac|mp3)(\?|$)/i.test(abs),
+        label: formatStreamLabel(fromUrl),
+      })
+    }
+  }
+
+  const rank = (s) => {
+    const q = parseInt(String(s.quality || '').replace(/\D/g, ''), 10) || 0
+    return q + (s.hdr ? 50 : 0)
+  }
+  out.sort((a, b) => rank(b) - rank(a))
+  return out.filter((s) => !s.isAudioOnly)
 }
 
 export function parseDetailMeta(html, baseUrl) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
+
   const title =
     match1(html, /property=["']og:title["'][^>]*content=["']([^"']+)["']/i) ||
     match1(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i)
   const clean = title ? cleanTitle(stripTags(title)) : undefined
-  const year = clean ? extractYear(clean) : extractYear(html.slice(0, 8000))
+  const year = clean ? extractYear(clean) : extractYear(html.slice(0, 12000))
   const imdb = match1(html, /imdb\.com\/title\/(tt\d+)/i)
-  const type = inferType(html.slice(0, 8000) + ' ' + (clean || ''))
+  const type = inferType(html.slice(0, 12000) + ' ' + (clean || ''))
 
+  // Prefer schema.org / thumbnailUrl (og:image is often broken on this site)
   let poster =
-    match1(html, /property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
-    match1(html, /name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i)
-  if (poster) poster = resolveUrl(base, poster) || poster
+    match1(html, /"thumbnailUrl"\s*:\s*"(https?:[^"\\]+)"/i) ||
+    match1(html, /"contentUrl"\s*:\s*"(https?:[^"\\]+\.(?:jpg|jpeg|png|webp)[^"\\]*)"/i) ||
+    match1(html, /property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
+  if (poster) {
+    poster = resolveUrl(base, poster) || poster
+    // Discard clearly broken local-path og images
+    if (/public_html|www\.film2med\.top\/jpeg/i.test(poster)) poster = undefined
+  }
 
   let description =
-    match1(html, /property=["']og:description["'][^>]*content=["']([^"']+)["']/i) ||
-    match1(html, /name=["']description["'][^>]*content=["']([^"']+)["']/i)
-  if (description) description = stripTags(description).slice(0, 1200)
+    match1(html, /"description"\s*:\s*"((?:\\.|[^"\\])+)"/i) ||
+    match1(html, /property=["']og:description["'][^>]*content=["']([^"']+)["']/i)
+  if (description) {
+    description = stripTags(decodeHtml(description)).slice(0, 1500)
+    if (isSpamDescription(description)) description = undefined
+  }
 
   return {
     title: clean,
@@ -136,16 +215,71 @@ export function decodePageId(itemId) {
   }
 }
 
-function formatStreamLabel(quality, size, inner) {
+export function formatStreamLabel(info = {}) {
   const parts = []
-  if (quality) parts.push(quality)
-  if (size) parts.push(size)
-  if (!parts.length && inner) {
-    const short = inner.replace(/\s+/g, ' ').slice(0, 60)
-    if (short) parts.push(short)
+  const q = info.quality ? String(info.quality).toUpperCase() : null
+  if (q) {
+    if (/2160|4K/i.test(q)) parts.push('🎬 4K')
+    else if (/1080/i.test(q)) parts.push('🎬 1080p')
+    else if (/720/i.test(q)) parts.push('🎬 720p')
+    else if (/480/i.test(q)) parts.push('🎬 480p')
+    else parts.push(`🎬 ${q}`)
+  } else {
+    parts.push('🎬')
   }
-  parts.push('دانلود مستقیم')
+  if (info.hdr) parts.push('HDR')
+  if (info.bit10) parts.push('10bit')
+  if (info.codec) parts.push(info.codec)
+  if (info.source) parts.push(info.source)
+
+  if (info.audio === 'dub') parts.push('🎧 دوبله فارسی')
+  else if (info.audio === 'sub') parts.push('📝 زیرنویس چسبیده')
+
+  if (info.size) parts.push(`📦 ${info.size}`)
+  if (info.encoder && info.encoder !== 'unknown') parts.push(info.encoder)
+  if (info.isAudioOnly) parts.push('🔊 فقط صدا')
+
   return parts.join(' · ')
+}
+
+function analyzeMediaUrl(url) {
+  const u = String(url)
+  const quality = extractQuality(u)
+  let audio = null
+  if (/\/DUB\/|Farsi\.Dubbed|\bDubbed\b|دوبله/i.test(u)) audio = 'dub'
+  else if (/\/SUB\/|Farsi\.Sub|HardSub|hardsub|زیرنویس/i.test(u)) audio = 'sub'
+
+  const source = /BluRay/i.test(u) ? 'BluRay' : /WEB-?DL|WEBRip/i.test(u) ? 'WEB' : /HDTV/i.test(u) ? 'HDTV' : null
+  const codec = /x265|HEVC/i.test(u) ? 'x265' : /x264|AVC/i.test(u) ? 'x264' : null
+  const hdr = /\bHDR\b/i.test(u)
+  const bit10 = /10bit|10-bit/i.test(u)
+  return { quality, audio, source, codec, hdr, bit10 }
+}
+
+function analyzeBlockText(block) {
+  const text = stripTags(block)
+  const quality =
+    extractQuality(text) ||
+    (/4\s*K|2160/i.test(text) ? '2160p' : null)
+  const size = extractSize(text)
+  let audio = null
+  if (/دوبله/i.test(text)) audio = 'dub'
+  else if (/زیرنویس/i.test(text)) audio = 'sub'
+  const source = /BluRay/i.test(text) ? 'BluRay' : /WEB/i.test(text) ? 'WEB' : null
+  const codec = /x265|HEVC/i.test(text) ? 'x265' : /x264/i.test(text) ? 'x264' : null
+  const hdr = /\bHDR\b/i.test(text)
+  const bit10 = /10\s*bit/i.test(text)
+  const encoder = match1(text, /انکودر\s*:?\s*([A-Za-z0-9._\-]+)/i)
+  return { quality, size, audio, source, codec, hdr, bit10, encoder }
+}
+
+function isSpamDescription(d) {
+  const t = String(d || '')
+  // Site-wide SEO keyword salad
+  if (/دانلود فیلم بدون سانسور.*دانلود رایگان فیلم/i.test(t)) return true
+  if ((t.match(/دانلود/g) || []).length >= 4) return true
+  if (t.length < 40) return true
+  return false
 }
 
 function isLikelyDetailUrl(abs, base) {
@@ -193,9 +327,13 @@ function isPlayableOrDownloadUrl(abs) {
     const u = new URL(abs)
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
     const s = abs.toLowerCase()
-    if (/\.(mp4|mkv|m3u8|avi|mov)(\?|$)/i.test(s)) return true
+    if (/\.(mp4|mkv|m3u8|avi|mov|mka)(\?|$)/i.test(s)) return true
     if (/\/(download|dl|file|stream|video)\b/i.test(s)) return true
-    if (/\b(cdn|dl|media|files)\b/i.test(u.hostname) && u.pathname.length > 5) return true
+    if (/\b(cdn|dl|media|files|abrtech)\b/i.test(u.hostname) && u.pathname.length > 8) {
+      return true
+    }
+    // playit query = online player page, not direct file — skip for stream list
+    if (/[?&]playit=/i.test(s)) return false
     return false
   } catch {
     return false
@@ -250,13 +388,20 @@ function extractYear(text) {
 }
 
 function extractQuality(text) {
-  const m = String(text).match(/\b(2160p|1080p|720p|480p|360p|4K|8K)\b/i)
-  return m ? m[1].toUpperCase().replace('4K', '2160p') : null
+  const t = String(text)
+  if (/\b2160p\b|\b4K\b/i.test(t)) return '2160p'
+  const m = t.match(/\b(1080p|720p|480p|360p)\b/i)
+  return m ? m[1].toUpperCase().replace('P', 'p') : null
 }
 
 function extractSize(text) {
-  const m = String(text).match(/\b(\d+(?:\.\d+)?\s*(?:GB|MB|گیگ|مگ|گیگابایت|مگابایت))\b/i)
-  return m ? m[1].replace(/گیگابایت/i, 'GB').replace(/مگابایت/i, 'MB').replace(/گیگ/i, 'GB').replace(/مگ/i, 'MB') : null
+  const m = String(text).match(/\b(\d+(?:\.\d+)?\s*(?:GB|MB|گیگابایت|مگابایت|گیگ|مگ))\b/i)
+  if (!m) return null
+  return m[1]
+    .replace(/گیگابایت/i, 'GB')
+    .replace(/مگابایت/i, 'MB')
+    .replace(/گیگ/i, 'GB')
+    .replace(/مگ/i, 'MB')
 }
 
 function inferType(text) {
@@ -282,7 +427,7 @@ function isNoiseTitle(title) {
 
 function cleanTitle(t) {
   return stripTags(t)
-    .replace(/دانلود\s*(فیلم|سریال|انیمه)?/gi, '')
+    .replace(/دانلود\s*(فیلم|سریال|انیمه|کالکشن)?/gi, '')
     .replace(/بدون\s*سانسور.*$/gi, '')
     .replace(/با\s*زیرنویس.*$/gi, '')
     .replace(/\s+/g, ' ')
@@ -298,6 +443,15 @@ function stripTags(s) {
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function decodeHtml(s) {
+  return String(s)
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
 }
 
 function match1(s, re) {

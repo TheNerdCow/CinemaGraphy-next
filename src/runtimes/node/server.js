@@ -17,7 +17,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.1.4'
+const VERSION = process.env.ADDON_VERSION || '0.1.5'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -72,11 +72,10 @@ function createApp() {
 a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
 .card{max-width:42rem;margin:auto;background:#12161f;border:1px solid #243044;border-radius:12px;padding:1.5rem}</style></head>
 <body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
-<p>F2Media + Cinemeta meta. فایل <code>.env</code> اختیاری است.</p>
+<p>F2Media streams با کیفیت/دوبله + Cinemeta plot.</p>
 <ul>
 <li><a href="/manifest.json">manifest.json</a></li>
 <li><a href="/health">health</a></li>
-<li><a href="/catalog/movie/f2media_movies/search=matrix.json">تست جست‌وجو matrix</a></li>
 </ul></div></body></html>`)
   })
 
@@ -205,11 +204,20 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
     }
     const streams = await provider.getStreams(detail, null, { config })
     res.json({
-      streams: (streams || []).map((s) => ({
-        name: s.quality ? `${s.quality}` : 'F2Media',
-        title: s.title || [s.quality, s.size, 'دانلود مستقیم'].filter(Boolean).join(' · '),
-        url: s.url,
-      })),
+      streams: (streams || []).map((s) => {
+        const q = s.quality || ''
+        const name =
+          /2160|4K/i.test(q) ? '🎬 4K' :
+          /1080/i.test(q) ? '🎬 1080p' :
+          /720/i.test(q) ? '🎬 720p' :
+          /480/i.test(q) ? '🎬 480p' :
+          q ? `🎬 ${q}` : '🎬 F2'
+        return {
+          name,
+          title: s.title,
+          url: s.url,
+        }
+      }),
     })
   })
 
