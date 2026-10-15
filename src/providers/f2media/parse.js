@@ -200,8 +200,15 @@ export function qualityBadge(quality) {
   return q || 'HD'
 }
 
+/** Unicode LTR embedding — keeps 2160p / HDR / F2Media from scrambling in RTL UI */
+const LRE = '\u202A'
+const PDF = '\u202C'
+function ltr(text) {
+  return `${LRE}${text}${PDF}`
+}
+
 /**
- * Labeled multi-line stream card (Stremio/Nuvio title).
+ * RTL-safe labeled stream card.
  *
  * 🎬 منبع: F2Media
  * 📊 کیفیت: 2160p · HDR · 10bit · BluRay · x265
@@ -214,7 +221,7 @@ export function formatStreamLabel(info = {}) {
   const lines = []
   const emoji = info.providerEmoji || '🎬'
   const provider = info.providerName || 'F2Media'
-  lines.push(`${emoji} منبع: ${provider}`)
+  lines.push(`${emoji} منبع: ${ltr(provider)}`)
 
   const tech = []
   if (info.quality) {
@@ -226,7 +233,9 @@ export function formatStreamLabel(info = {}) {
   if (info.bit10) tech.push('10bit')
   if (info.source) tech.push(info.source)
   if (info.codec) tech.push(info.codec)
-  if (tech.length) lines.push(`📊 کیفیت: ${tech.join(' · ')}`)
+  if (tech.length) {
+    lines.push(`📊 کیفیت: ${ltr(tech.join(' · '))}`)
+  }
 
   if (info.audio === 'sub') {
     lines.push('📝 زیرنویس: زیرنویس چسبیده فارسی')
@@ -235,11 +244,11 @@ export function formatStreamLabel(info = {}) {
   }
 
   if (info.encoder && !/^unknown$/i.test(info.encoder)) {
-    lines.push(`🎞️ انکدر: ${info.encoder}`)
+    lines.push(`🎞️ انکدر: ${ltr(info.encoder)}`)
   }
 
   if (info.size) {
-    lines.push(`📦 سایز: ${info.size}`)
+    lines.push(`📦 سایز: ${ltr(String(info.size))}`)
   }
 
   if (info.isAudioOnly) lines.push('🔊 فقط صدا')
@@ -452,8 +461,8 @@ function stripTags(s) {
   return String(s)
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
+    .replace(/&/g, '&')
+    .replace(/"/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, ' ')
     .trim()
@@ -461,8 +470,8 @@ function stripTags(s) {
 
 function decodeHtml(s) {
   return String(s)
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
+    .replace(/&/g, '&')
+    .replace(/"/g, '"')
     .replace(/&#39;/g, "'")
 }
 
