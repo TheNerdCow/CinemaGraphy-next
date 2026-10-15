@@ -15,8 +15,16 @@ import {
   parseDetailMeta,
   decodePageId,
 } from './parse.js'
+import { parseListingHtml, parseHomeRail } from './parse-listing.js'
+import {
+  F2_CATALOGS,
+  getCatalogById,
+  toManifestCatalogs,
+  catalogListUrl,
+} from './catalogs.js'
 
 const DEFAULT_BASE = 'https://www.film2med.top'
+const PAGE_SIZE = 16
 
 export function createF2MediaProvider(deps = {}) {
   const http = deps.http || createHttpClient()
@@ -28,7 +36,7 @@ export function createF2MediaProvider(deps = {}) {
     name: 'F2Media',
     capabilities: {
       search: true,
-      browseCatalogs: [],
+      browseCatalogs: toManifestCatalogs('fa'),
       streams: true,
       providerMeta: true,
       auth: 'none',
@@ -63,43 +71,65 @@ export function createF2MediaProvider(deps = {}) {
         if (!res.ok) return []
         const html = await res.text()
         const parsed = parseSearchHtml(html, base)
-
-        // Enrich posters via Cinemeta (metahub) — site CDNs often blocked in IR
-        const enriched = await Promise.all(
-          parsed.slice(0, 20).map(async (item) => {
-            let poster = item.poster
-            let imdb
-            try {
-              const q2 = item.year ? `${item.title} ${item.year}` : item.title
-              const cm = await cinemeta.search(q2, item.type)
-              if (cm?.imdb) {
-                imdb = cm.imdb
-                poster = metahubPoster(cm.imdb) || cm.poster || poster
-              }
-            } catch {
-              /* ignore */
-            }
-            return {
-              internalId: makeInternalId('f2media', item.itemId),
-              type: item.type,
-              title: item.title,
-              year: item.year,
-              poster,
-              imdb,
-              providerKey: 'f2media',
-              externalRefs: { pagePath: item.pagePath },
-            }
-          }),
-        )
-
-        logger.info?.('f2media search', {
-          q,
-          count: enriched.length,
-          withPoster: enriched.filter((x) => x.poster).length,
-        })
-        return enriched
+        return enrichPosters(parsed, cinemeta, logger)
       } catch (err) {
         logger.warn?.('f2media search failed', { message: err.message })
+        return []
+      }
+    },
+
+    /**
+     * Browse editorial catalog.
+     * skip: Stremio offset (0, 16, 32…) → page = floor(skip/16)+1
+     */
+    async browse(catalogId, ctx = {}) {
+      const cat = getCatalogById(catalogId)
+      if (!cat) return []
+      const base = this.baseUrl(ctx.config || {})
+      const skip = Number(ctx.skip) || 0
+      const page = Math.floor(skip / PAGE_SIZE) + 1
+
+      try {
+        let parsed = []
+        // First page: prefer homepage rail (fresh + matches site UI)
+        if (page === 1 && cat.homeRail) {
+          const homeRes = await http.get(base + '/', {
+            timeoutMs: ctx.timeoutMs || 15_000,
+            headers: { 'Accept-Language': 'fa-IR,fa;q=0.9,en;q=0.8' },
+          })
+          if (homeRes.ok) {
+            const homeHtml = await homeRes.text()
+            parsed = parseHomeRail(homeHtml, base, cat.homeRail)
+          }
+        }
+        if (parsed.length === 0) {
+          const url = catalogListUrl(base, cat, page)
+          const res = await http.get(url, {
+            timeoutMs: ctx.timeoutMs || 15_000,
+            headers: { 'Accept-Language': 'fa-IR,fa;q=0.9,en;q=0.8' },
+          })
+          if (!res.ok) {
+            logger.warn?.('f2media browse non-OK', { status: res.status, url })
+            return []
+          }
+          const html = await res.text()
+          parsed = parseListingHtml(html, base)
+        }
+
+        // Prefer matching type
+        parsed = parsed.filter((it) => it.type === cat.type || cat.id === 'f2media_coming_soon')
+
+        logger.info?.('f2media browse', {
+          catalogId,
+          page,
+          count: parsed.length,
+        })
+
+        // Light poster enrich (cap concurrency cost)
+        const items = await enrichPosters(parsed.slice(0, 24), cinemeta, logger)
+        return items
+      } catch (err) {
+        logger.warn?.('f2media browse failed', { message: err.message, catalogId })
         return []
       }
     },
@@ -175,4 +205,34 @@ export function createF2MediaProvider(deps = {}) {
   }
 }
 
+async function enrichPosters(parsed, cinemeta, logger) {
+  return Promise.all(
+    parsed.map(async (item) => {
+      let poster = item.poster
+      let imdb
+      try {
+        const q2 = item.year ? `${item.title} ${item.year}` : item.title
+        const cm = await cinemeta.search(q2, item.type)
+        if (cm?.imdb) {
+          imdb = cm.imdb
+          poster = metahubPoster(cm.imdb) || cm.poster || poster
+        }
+      } catch {
+        /* ignore */
+      }
+      return {
+        internalId: makeInternalId('f2media', item.itemId),
+        type: item.type,
+        title: item.title,
+        year: item.year,
+        poster,
+        imdb,
+        providerKey: 'f2media',
+        externalRefs: { pagePath: item.pagePath },
+      }
+    }),
+  )
+}
+
 export default createF2MediaProvider
+export { F2_CATALOGS }

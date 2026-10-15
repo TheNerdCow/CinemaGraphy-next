@@ -17,7 +17,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.1.7'
+const VERSION = process.env.ADDON_VERSION || '0.2.0'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -72,8 +72,12 @@ function createApp() {
 a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
 .card{max-width:42rem;margin:auto;background:#12161f;border:1px solid #243044;border-radius:12px;padding:1.5rem}</style></head>
 <body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
-<p>پوستر سرچ + استریم برچسب‌دار.</p>
-<ul><li><a href="/manifest.json">manifest</a></li><li><a href="/health">health</a></li></ul></div></body></html>`)
+<p>F2Media browse catalogs + search/stream.</p>
+<ul>
+<li><a href="/manifest.json">manifest</a></li>
+<li><a href="/health">health</a></li>
+<li><a href="/catalog/movie/f2media_movies_updated.json">کاتالوگ فیلم‌های به‌روز</a></li>
+</ul></div></body></html>`)
   })
 
   app.get('/health', (_req, res) => {
@@ -97,46 +101,88 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
     const extraRaw =
       req.params.extraArgs ||
       req.params[0] ||
-      (req.url.includes('/search=') ? req.url.split('/').pop() : '')
+      (req.url.includes('/search=') || req.url.includes('/skip=')
+        ? req.url.split('/').pop()
+        : '')
     const extra = parseExtra(extraRaw)
     const search = extra.search ? String(extra.search) : ''
+    const skip = extra.skip ? Number(extra.skip) : 0
 
-    const m = id.match(/^([a-z0-9]+)_(movies|series)$/i)
-    if (!m || !search) {
-      res.json({ metas: [] })
-      return
-    }
+    log.info('catalog request', { type, id, search: search || undefined, skip })
 
-    const providerKey = m[1].toLowerCase()
-    const provider = getProvider(providerKey)
-    if (!provider || !provider.isEnabled(config)) {
-      res.json({ metas: [] })
-      return
-    }
-
-    try {
-      const items = await provider.search(search, {
-        config,
-        timeoutMs: config.timeouts?.providerMs || 15_000,
-      })
-      const wantType = type === 'series' ? 'series' : 'movie'
-      const metas = items
-        .filter((it) => it.type === wantType || (wantType === 'movie' && it.type !== 'series'))
-        .map((it) => {
-          const itemId = String(it.internalId || '').replace(new RegExp(`^cg:${providerKey}:`), '')
-          return {
-            id: toStremioProviderId(providerKey, itemId),
-            type: it.type,
-            name: it.title,
-            poster: it.poster,
-            releaseInfo: it.year ? String(it.year) : undefined,
-          }
+    // Search catalogs: f2media_movies / f2media_series
+    const searchMatch = id.match(/^([a-z0-9]+)_(movies|series)$/i)
+    if (searchMatch && search) {
+      const providerKey = searchMatch[1].toLowerCase()
+      const provider = getProvider(providerKey)
+      if (!provider?.search || !provider.isEnabled(config)) {
+        res.json({ metas: [] })
+        return
+      }
+      try {
+        const items = await provider.search(search, {
+          config,
+          timeoutMs: config.timeouts?.providerMs || 15_000,
         })
-      res.json({ metas })
-    } catch (err) {
-      log.warn('catalog error', { message: err.message })
-      res.json({ metas: [] })
+        const wantType = type === 'series' ? 'series' : 'movie'
+        res.json({ metas: toMetas(items, providerKey, wantType) })
+      } catch (err) {
+        log.warn('catalog search error', { message: err.message })
+        res.json({ metas: [] })
+      }
+      return
     }
+
+    // Browse catalogs: f2media_movies_updated, f2media_turkish, …
+    if (id.startsWith('f2media_') && !search) {
+      const provider = getProvider('f2media')
+      if (!provider?.browse || !provider.isEnabled(config)) {
+        res.json({ metas: [] })
+        return
+      }
+      // streams-only mode: no browse catalogs
+      if (config.mode === 'streams') {
+        res.json({ metas: [] })
+        return
+      }
+      try {
+        const items = await provider.browse(id, {
+          config,
+          skip,
+          timeoutMs: config.timeouts?.providerMs || 15_000,
+        })
+        res.json({ metas: toMetas(items, 'f2media', type) })
+      } catch (err) {
+        log.warn('catalog browse error', { message: err.message })
+        res.json({ metas: [] })
+      }
+      return
+    }
+
+    res.json({ metas: [] })
+  }
+
+  function toMetas(items, providerKey, wantType) {
+    return (items || [])
+      .filter(
+        (it) =>
+          !wantType ||
+          it.type === wantType ||
+          (wantType === 'movie' && it.type !== 'series'),
+      )
+      .map((it) => {
+        const itemId = String(it.internalId || '').replace(
+          new RegExp(`^cg:${providerKey}:`),
+          '',
+        )
+        return {
+          id: toStremioProviderId(providerKey, itemId),
+          type: it.type,
+          name: it.title,
+          poster: it.poster,
+          releaseInfo: it.year ? String(it.year) : undefined,
+        }
+      })
   }
 
   app.get('/catalog/:type/:id/:extraArgs.json', catalogHandler)
