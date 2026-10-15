@@ -1,16 +1,17 @@
 /**
- * F2Media provider — fast streams/search first; Cinemeta poster optional (catalog cards only).
+ * F2Media — multi-query search, stream-first detail, optional TMDB + Cinemeta posters.
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
 import { createHttpClient } from '../../core/http/client.js'
 import { createMemoryCache } from '../../core/cache/memory.js'
-import { isStrictTitleMatch } from '../../core/meta/match.js'
+import { isStrictTitleMatch, isPosterMatch } from '../../core/meta/match.js'
 import {
   createCinemetaClient,
   metahubPoster,
   metahubBackground,
 } from '../../core/meta/cinemeta.js'
+import { createTmdbClient } from '../../core/meta/tmdb.js'
 import {
   parseSearchHtml,
   parseDetailStreams,
@@ -33,46 +34,106 @@ const CACHE_HTML_MS = 8 * 60_000
 const CACHE_POSTER_MS = 24 * 60_000
 
 export function createF2MediaProvider(deps = {}) {
-  // Separate clients so Cinemeta never blocks F2Media HTML fetches
-  const http = deps.http || createHttpClient({ maxConcurrent: 4, timeoutMs: 12_000 })
-  const metaHttp = deps.metaHttp || createHttpClient({ maxConcurrent: 4, timeoutMs: 4_000 })
+  const http = deps.http || createHttpClient({ maxConcurrent: 5, timeoutMs: 14_000 })
+  const metaHttp = deps.metaHttp || createHttpClient({ maxConcurrent: 5, timeoutMs: 5_000 })
   const logger = deps.logger || console
   const cinemeta = deps.cinemeta || createCinemetaClient({ http: metaHttp })
+  const tmdb = deps.tmdb || createTmdbClient({ http: metaHttp })
   const cache = deps.cache || createMemoryCache(CACHE_LIST_MS)
 
-  /** Best-effort poster for catalog cards — never throws, never blocks long */
-  async function catalogPoster(title, year, type) {
-    if (!title) return undefined
-    const key = `poster:${type}:${title}:${year || ''}`
+  async function resolveImages(title, year, type) {
+    if (!title) return {}
+    const key = `img:${type}:${title}:${year || ''}`
     const cached = cache.get(key)
-    if (cached !== undefined) return cached?.poster
+    if (cached !== undefined) return cached
 
-    try {
-      const q = year ? `${title} ${year}` : title
-      const found = await Promise.race([
-        cinemeta.search(q, type === 'series' ? 'series' : 'movie'),
-        new Promise((r) => setTimeout(() => r(null), 3500)),
-      ])
-      if (!found?.imdb || !isStrictTitleMatch(title, found.name, year)) {
-        cache.set(key, { poster: undefined }, CACHE_POSTER_MS)
-        return undefined
+    const out = {}
+    const t = type === 'series' ? 'series' : 'movie'
+
+    // 1) TMDB if configured (best posters/backdrops)
+    if (tmdb.enabled) {
+      try {
+        const q = year ? `${title}` : title
+        const row = await Promise.race([
+          tmdb.search(q, t),
+          new Promise((r) => setTimeout(() => r(null), 4000)),
+        ])
+        if (row && isPosterMatch(title, row.name, year, row.year)) {
+          out.poster = row.poster
+          out.background = row.background
+          out.imdb = row.imdb
+          out.description = row.description
+          out.genres = row.genres
+          out.imdbRating = row.imdbRating
+          out.source = 'tmdb'
+        }
+      } catch {
+        /* ignore */
       }
-      const poster = metahubPoster(found.imdb) || found.poster
-      cache.set(key, { poster, imdb: found.imdb }, CACHE_POSTER_MS)
-      return poster
-    } catch {
-      return undefined
     }
+
+    // 2) Cinemeta / metahub fallback
+    if (!out.poster) {
+      try {
+        const q = year ? `${title} ${year}` : title
+        const found = await Promise.race([
+          cinemeta.search(q, t),
+          new Promise((r) => setTimeout(() => r(null), 3500)),
+        ])
+        if (found?.imdb && isPosterMatch(title, found.name, year, found.year)) {
+          out.poster = metahubPoster(found.imdb) || found.poster
+          out.background = metahubBackground(found.imdb) || found.background || out.poster
+          out.imdb = found.imdb
+          if (!out.description) out.description = found.description
+          if (!out.genres) out.genres = found.genres
+          if (!out.imdbRating) out.imdbRating = found.imdbRating
+          out.source = 'cinemeta'
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    cache.set(key, out, CACHE_POSTER_MS)
+    return out
   }
 
-  async function attachPosters(items, limit = 12) {
+  async function attachImages(items, limit = 14) {
     const slice = items.slice(0, limit)
     await Promise.all(
       slice.map(async (it) => {
-        it.poster = await catalogPoster(it.title, it.year, it.type)
+        const img = await resolveImages(it.title, it.year, it.type)
+        if (img.poster) it.poster = img.poster
+        if (img.imdb) it.imdb = img.imdb
       }),
     )
     return items
+  }
+
+  /** Multiple query variants to catch titles F2 search misses */
+  function searchQueries(raw) {
+    const q = String(raw || '').trim()
+    if (!q) return []
+    const set = new Set()
+    set.add(q)
+    // without year
+    const noYear = q.replace(/\b(19|20)\d{2}\b/g, '').replace(/\s+/g, ' ').trim()
+    if (noYear && noYear !== q) set.add(noYear)
+    // first 3-5 significant words
+    const words = noYear.split(/\s+/).filter(Boolean)
+    if (words.length > 3) set.add(words.slice(0, 3).join(' '))
+    if (words.length > 4) set.add(words.slice(0, 4).join(' '))
+    // hyphen/colon variants
+    set.add(q.replace(/:/g, ' ').replace(/\s+/g, ' ').trim())
+    set.add(q.replace(/-/g, ' ').replace(/\s+/g, ' ').trim())
+    return [...set].filter((s) => s.length >= 2).slice(0, 4)
+  }
+
+  async function searchOnce(base, q, timeoutMs) {
+    const url = `${base}/?s=${encodeURIComponent(q)}`
+    const res = await http.get(url, { timeoutMs })
+    if (!res.ok) return []
+    return parseSearchHtml(await res.text(), base)
   }
 
   return {
@@ -84,6 +145,7 @@ export function createF2MediaProvider(deps = {}) {
       streams: true,
       providerMeta: true,
       auth: 'none',
+      tmdb: Boolean(tmdb.enabled),
     },
 
     isEnabled(config) {
@@ -106,19 +168,31 @@ export function createF2MediaProvider(deps = {}) {
       const q = String(query || '').trim()
       if (!q) return []
       const base = this.baseUrl(ctx.config || {})
-      const cacheKey = `search:${base}:${q}`
+      const cacheKey = `search:${base}:${q.toLowerCase()}`
       const hit = cache.get(cacheKey)
       if (hit) return hit
 
       try {
-        const res = await http.get(`${base}/?s=${encodeURIComponent(q)}`, {
-          timeoutMs: ctx.timeoutMs || 12_000,
-        })
-        if (!res.ok) return []
-        const items = mapItems(parseSearchHtml(await res.text(), base))
-        // posters optional — don't fail search
-        await attachPosters(items, 10)
+        const variants = searchQueries(q)
+        const merged = []
+        const seen = new Set()
+        for (const v of variants) {
+          try {
+            const rows = await searchOnce(base, v, ctx.timeoutMs || 12_000)
+            for (const r of rows) {
+              if (seen.has(r.pagePath)) continue
+              seen.add(r.pagePath)
+              merged.push(r)
+            }
+            if (merged.length >= 8) break
+          } catch {
+            /* try next variant */
+          }
+        }
+        const items = mapItems(merged)
+        await attachImages(items, 12)
         cache.set(cacheKey, items, CACHE_LIST_MS)
+        logger.info?.('f2media search', { q, variants: variants.length, count: items.length })
         return items
       } catch (err) {
         logger.warn?.('f2media search failed', { message: err.message })
@@ -151,13 +225,14 @@ export function createF2MediaProvider(deps = {}) {
           (it) => it.type === cat.type || cat.id === 'f2media_coming_soon',
         )
         const items = mapItems(parsed.slice(0, 24))
-        await attachPosters(items, 12)
+        await attachImages(items, 16)
         cache.set(cacheKey, items, CACHE_LIST_MS)
         logger.info?.('f2media browse', {
           catalogId,
           page,
           count: items.length,
-          withPoster: items.filter((i) => i.poster).length,
+          posters: items.filter((i) => i.poster).length,
+          tmdb: tmdb.enabled,
         })
         return items
       } catch (err) {
@@ -172,7 +247,6 @@ export function createF2MediaProvider(deps = {}) {
       const base = this.baseUrl(ctx.config || {})
       const cacheKey = `detail:${base}:${pagePath}`
       const hit = cache.get(cacheKey)
-      // Only reuse cache if it has streams or series videos (avoid sticky empty)
       if (hit && ((hit.streams && hit.streams.length) || (hit.videos && hit.videos.length))) {
         return hit
       }
@@ -200,46 +274,12 @@ export function createF2MediaProvider(deps = {}) {
           streams = parseDetailStreams(html, base)
         }
 
-        // Optional Cinemeta for card poster only — never required for streams
-        let poster
-        let background
-        let imdb = meta.imdb
-        let description = meta.description
-        let genres
-        let imdbRating
-        let runtime
-
-        try {
-          const cm = await Promise.race([
-            (async () => {
-              if (meta.imdb) {
-                const byId = await cinemeta.byImdb(meta.imdb, isSeries ? 'series' : 'movie')
-                if (byId && (!meta.title || isStrictTitleMatch(meta.title, byId.name, meta.year))) {
-                  return byId
-                }
-              }
-              if (meta.title) {
-                const q = meta.year ? `${meta.title} ${meta.year}` : meta.title
-                const found = await cinemeta.search(q, isSeries ? 'series' : 'movie')
-                if (found && isStrictTitleMatch(meta.title, found.name, meta.year)) return found
-              }
-              return null
-            })(),
-            new Promise((r) => setTimeout(() => r(null), 4000)),
-          ])
-          if (cm?.imdb) {
-            imdb = cm.imdb
-            poster = metahubPoster(cm.imdb) || cm.poster
-            // background optional — user asked for catalog poster mainly
-            background = metahubBackground(cm.imdb) || poster
-            if (cm.description && cm.description.length > 40) description = cm.description
-            genres = cm.genres
-            imdbRating = cm.imdbRating
-            runtime = cm.runtime
-          }
-        } catch {
-          /* ignore meta errors */
-        }
+        // Images AFTER streams — never block playback
+        const img = await resolveImages(
+          meta.title,
+          meta.year,
+          isSeries ? 'series' : 'movie',
+        )
 
         const detail = {
           id: itemId,
@@ -247,13 +287,12 @@ export function createF2MediaProvider(deps = {}) {
           type: isSeries ? 'series' : 'movie',
           title: meta.title,
           year: meta.year,
-          imdb,
-          poster,
-          background,
-          description,
-          genres,
-          imdbRating,
-          runtime,
+          imdb: img.imdb || meta.imdb,
+          poster: img.poster,
+          background: img.background || img.poster,
+          description: img.description || meta.description,
+          genres: img.genres,
+          imdbRating: img.imdbRating,
           streams,
           episodes,
           videos,
@@ -266,6 +305,7 @@ export function createF2MediaProvider(deps = {}) {
           pagePath,
           streams: streams.length,
           videos: videos.length,
+          poster: Boolean(detail.poster),
         })
         return detail
       } catch (err) {
