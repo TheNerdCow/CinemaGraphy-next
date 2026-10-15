@@ -1,5 +1,5 @@
 /**
- * F2Media provider — posters only from Cinemeta/metahub (strict title match).
+ * F2Media provider — fast streams/search first; Cinemeta poster optional (catalog cards only).
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
@@ -27,67 +27,52 @@ import {
 
 const DEFAULT_BASE = 'https://www.film2med.top'
 const PAGE_SIZE = 16
-const CACHE_LIST_MS = 15 * 60_000
-const CACHE_DETAIL_MS = 20 * 60_000
-const CACHE_HTML_MS = 12 * 60_000
+const CACHE_LIST_MS = 10 * 60_000
+const CACHE_DETAIL_MS = 12 * 60_000
+const CACHE_HTML_MS = 8 * 60_000
 const CACHE_POSTER_MS = 24 * 60_000
 
 export function createF2MediaProvider(deps = {}) {
-  const http = deps.http || createHttpClient({ minGapMs: 120 })
+  // Separate clients so Cinemeta never blocks F2Media HTML fetches
+  const http = deps.http || createHttpClient({ maxConcurrent: 4, timeoutMs: 12_000 })
+  const metaHttp = deps.metaHttp || createHttpClient({ maxConcurrent: 4, timeoutMs: 4_000 })
   const logger = deps.logger || console
-  const cinemeta = deps.cinemeta || createCinemetaClient({ http })
+  const cinemeta = deps.cinemeta || createCinemetaClient({ http: metaHttp })
   const cache = deps.cache || createMemoryCache(CACHE_LIST_MS)
 
-  async function resolvePoster(title, year, type) {
-    if (!title) return { poster: undefined, imdb: undefined }
-    const key = `poster:${type || 'movie'}:${title}:${year || ''}`
-    return cache.wrap(
-      key,
-      async () => {
-        try {
-          const q = year ? `${title} ${year}` : title
-          const found = await cinemeta.search(q, type === 'series' ? 'series' : 'movie')
-          if (!found?.imdb) return { poster: undefined, imdb: undefined }
-          if (!isStrictTitleMatch(title, found.name, year)) {
-            return { poster: undefined, imdb: undefined }
-          }
-          return {
-            poster: metahubPoster(found.imdb) || found.poster,
-            imdb: found.imdb,
-            background: metahubBackground(found.imdb) || found.background,
-            description: found.description,
-            genres: found.genres,
-            imdbRating: found.imdbRating,
-            runtime: found.runtime,
-            name: found.name,
-          }
-        } catch {
-          return { poster: undefined, imdb: undefined }
-        }
-      },
-      CACHE_POSTER_MS,
-    )
+  /** Best-effort poster for catalog cards — never throws, never blocks long */
+  async function catalogPoster(title, year, type) {
+    if (!title) return undefined
+    const key = `poster:${type}:${title}:${year || ''}`
+    const cached = cache.get(key)
+    if (cached !== undefined) return cached?.poster
+
+    try {
+      const q = year ? `${title} ${year}` : title
+      const found = await Promise.race([
+        cinemeta.search(q, type === 'series' ? 'series' : 'movie'),
+        new Promise((r) => setTimeout(() => r(null), 3500)),
+      ])
+      if (!found?.imdb || !isStrictTitleMatch(title, found.name, year)) {
+        cache.set(key, { poster: undefined }, CACHE_POSTER_MS)
+        return undefined
+      }
+      const poster = metahubPoster(found.imdb) || found.poster
+      cache.set(key, { poster, imdb: found.imdb }, CACHE_POSTER_MS)
+      return poster
+    } catch {
+      return undefined
+    }
   }
 
-  async function withCinemetaPosters(items) {
-    // Limit concurrency to keep light
-    const out = []
-    const chunk = 4
-    for (let i = 0; i < items.length; i += chunk) {
-      const slice = items.slice(i, i + chunk)
-      const part = await Promise.all(
-        slice.map(async (it) => {
-          const cm = await resolvePoster(it.title, it.year, it.type)
-          return {
-            ...it,
-            poster: cm.poster,
-            imdb: cm.imdb,
-          }
-        }),
-      )
-      out.push(...part)
-    }
-    return out
+  async function attachPosters(items, limit = 12) {
+    const slice = items.slice(0, limit)
+    await Promise.all(
+      slice.map(async (it) => {
+        it.poster = await catalogPoster(it.title, it.year, it.type)
+      }),
+    )
+    return items
   }
 
   return {
@@ -121,18 +106,24 @@ export function createF2MediaProvider(deps = {}) {
       const q = String(query || '').trim()
       if (!q) return []
       const base = this.baseUrl(ctx.config || {})
-      return cache.wrap(
-        `search:${base}:${q}`,
-        async () => {
-          const res = await http.get(`${base}/?s=${encodeURIComponent(q)}`, {
-            timeoutMs: ctx.timeoutMs || 15_000,
-          })
-          if (!res.ok) return []
-          const parsed = mapItems(parseSearchHtml(await res.text(), base))
-          return withCinemetaPosters(parsed.slice(0, 20))
-        },
-        CACHE_LIST_MS,
-      )
+      const cacheKey = `search:${base}:${q}`
+      const hit = cache.get(cacheKey)
+      if (hit) return hit
+
+      try {
+        const res = await http.get(`${base}/?s=${encodeURIComponent(q)}`, {
+          timeoutMs: ctx.timeoutMs || 12_000,
+        })
+        if (!res.ok) return []
+        const items = mapItems(parseSearchHtml(await res.text(), base))
+        // posters optional — don't fail search
+        await attachPosters(items, 10)
+        cache.set(cacheKey, items, CACHE_LIST_MS)
+        return items
+      } catch (err) {
+        logger.warn?.('f2media search failed', { message: err.message })
+        return []
+      }
     },
 
     async browse(catalogId, ctx = {}) {
@@ -141,111 +132,146 @@ export function createF2MediaProvider(deps = {}) {
       const base = this.baseUrl(ctx.config || {})
       const skip = Number(ctx.skip) || 0
       const page = Math.floor(skip / PAGE_SIZE) + 1
+      const cacheKey = `browse:${base}:${catalogId}:${page}`
+      const hit = cache.get(cacheKey)
+      if (hit) return hit
 
-      return cache.wrap(
-        `browse:${base}:${catalogId}:${page}`,
-        async () => {
-          let parsed = []
-          if (page === 1 && cat.homeRail) {
-            const homeHtml = await fetchHtml(http, base + '/', ctx, cache, `html:${base}:home`)
-            if (homeHtml) parsed = parseHomeRail(homeHtml, base, cat.homeRail)
-          }
-          if (parsed.length === 0) {
-            const url = catalogListUrl(base, cat, page)
-            const html = await fetchHtml(http, url, ctx, cache, `html:${url}`)
-            if (html) parsed = parseListingHtml(html, base)
-          }
-          parsed = parsed.filter(
-            (it) => it.type === cat.type || cat.id === 'f2media_coming_soon',
-          )
-          const items = mapItems(parsed.slice(0, 24))
-          const withPosters = await withCinemetaPosters(items)
-          logger.info?.('f2media browse', {
-            catalogId,
-            page,
-            count: withPosters.length,
-            withPoster: withPosters.filter((p) => p.poster).length,
-          })
-          return withPosters
-        },
-        CACHE_LIST_MS,
-      )
+      try {
+        let parsed = []
+        if (page === 1 && cat.homeRail) {
+          const homeHtml = await fetchHtml(http, base + '/', ctx, cache, `html:${base}:home`)
+          if (homeHtml) parsed = parseHomeRail(homeHtml, base, cat.homeRail)
+        }
+        if (parsed.length === 0) {
+          const url = catalogListUrl(base, cat, page)
+          const html = await fetchHtml(http, url, ctx, cache, `html:${url}`)
+          if (html) parsed = parseListingHtml(html, base)
+        }
+        parsed = parsed.filter(
+          (it) => it.type === cat.type || cat.id === 'f2media_coming_soon',
+        )
+        const items = mapItems(parsed.slice(0, 24))
+        await attachPosters(items, 12)
+        cache.set(cacheKey, items, CACHE_LIST_MS)
+        logger.info?.('f2media browse', {
+          catalogId,
+          page,
+          count: items.length,
+          withPoster: items.filter((i) => i.poster).length,
+        })
+        return items
+      } catch (err) {
+        logger.warn?.('f2media browse failed', { message: err.message, catalogId })
+        return []
+      }
     },
 
     async getDetail(itemId, type, ctx = {}) {
       const pagePath = decodePageId(itemId)
       if (!pagePath) return null
       const base = this.baseUrl(ctx.config || {})
+      const cacheKey = `detail:${base}:${pagePath}`
+      const hit = cache.get(cacheKey)
+      // Only reuse cache if it has streams or series videos (avoid sticky empty)
+      if (hit && ((hit.streams && hit.streams.length) || (hit.videos && hit.videos.length))) {
+        return hit
+      }
 
-      return cache.wrap(
-        `detail:${base}:${pagePath}`,
-        async () => {
-          const res = await http.get(`${base}/${pagePath}`, {
-            timeoutMs: ctx.timeoutMs || 15_000,
-          })
-          if (!res.ok) return null
-          const html = await res.text()
-          const meta = parseDetailMeta(html, base)
+      try {
+        const res = await http.get(`${base}/${pagePath}`, {
+          timeoutMs: ctx.timeoutMs || 14_000,
+        })
+        if (!res.ok) return null
+        const html = await res.text()
+        const meta = parseDetailMeta(html, base)
 
-          const isSeries =
-            type === 'series' || meta.type === 'series' || /\/series\//i.test(pagePath)
+        const isSeries =
+          type === 'series' || meta.type === 'series' || /\/series\//i.test(pagePath)
 
-          let streams = []
-          let episodes = []
-          let videos = []
-          if (isSeries) {
-            const parsed = parseSeriesEpisodes(html, base)
-            episodes = parsed.episodes
-            videos = parsed.videos
-            streams = episodes.flatMap((e) => e.streams)
-          } else {
-            streams = parseDetailStreams(html, base)
+        let streams = []
+        let episodes = []
+        let videos = []
+        if (isSeries) {
+          const parsed = parseSeriesEpisodes(html, base)
+          episodes = parsed.episodes
+          videos = parsed.videos
+          streams = episodes.flatMap((e) => e.streams)
+        } else {
+          streams = parseDetailStreams(html, base)
+        }
+
+        // Optional Cinemeta for card poster only — never required for streams
+        let poster
+        let background
+        let imdb = meta.imdb
+        let description = meta.description
+        let genres
+        let imdbRating
+        let runtime
+
+        try {
+          const cm = await Promise.race([
+            (async () => {
+              if (meta.imdb) {
+                const byId = await cinemeta.byImdb(meta.imdb, isSeries ? 'series' : 'movie')
+                if (byId && (!meta.title || isStrictTitleMatch(meta.title, byId.name, meta.year))) {
+                  return byId
+                }
+              }
+              if (meta.title) {
+                const q = meta.year ? `${meta.title} ${meta.year}` : meta.title
+                const found = await cinemeta.search(q, isSeries ? 'series' : 'movie')
+                if (found && isStrictTitleMatch(meta.title, found.name, meta.year)) return found
+              }
+              return null
+            })(),
+            new Promise((r) => setTimeout(() => r(null), 4000)),
+          ])
+          if (cm?.imdb) {
+            imdb = cm.imdb
+            poster = metahubPoster(cm.imdb) || cm.poster
+            // background optional — user asked for catalog poster mainly
+            background = metahubBackground(cm.imdb) || poster
+            if (cm.description && cm.description.length > 40) description = cm.description
+            genres = cm.genres
+            imdbRating = cm.imdbRating
+            runtime = cm.runtime
           }
+        } catch {
+          /* ignore meta errors */
+        }
 
-          // Cinemeta for poster + optional plot — strict match only; never replace wrong title
-          let cm = null
-          if (meta.imdb) {
-            const byId = await cinemeta.byImdb(meta.imdb, isSeries ? 'series' : 'movie')
-            if (byId && (!meta.title || isStrictTitleMatch(meta.title, byId.name, meta.year))) {
-              cm = byId
-            }
-          }
-          if (!cm && meta.title) {
-            cm = await resolvePoster(meta.title, meta.year, isSeries ? 'series' : 'movie')
-            // resolvePoster returns partial; normalize
-            if (cm && !cm.name && cm.imdb) {
-              const full = await cinemeta.byImdb(cm.imdb, isSeries ? 'series' : 'movie')
-              if (full) cm = { ...cm, ...full }
-            }
-          }
+        const detail = {
+          id: itemId,
+          pagePath,
+          type: isSeries ? 'series' : 'movie',
+          title: meta.title,
+          year: meta.year,
+          imdb,
+          poster,
+          background,
+          description,
+          genres,
+          imdbRating,
+          runtime,
+          streams,
+          episodes,
+          videos,
+        }
 
-          const imdb = cm?.imdb || meta.imdb
-          const poster = (imdb && metahubPoster(imdb)) || cm?.poster
-          const background =
-            (imdb && metahubBackground(imdb)) || cm?.background || poster
-
-          return {
-            id: itemId,
-            pagePath,
-            type: isSeries ? 'series' : 'movie',
-            title: meta.title || cm?.name,
-            year: meta.year || (cm?.year ? parseInt(String(cm.year), 10) : undefined),
-            imdb,
-            poster,
-            background,
-            description:
-              (cm?.description && String(cm.description).length > 40 ? cm.description : null) ||
-              meta.description,
-            genres: cm?.genres,
-            imdbRating: cm?.imdbRating,
-            runtime: cm?.runtime,
-            streams,
-            episodes,
-            videos,
-          }
-        },
-        CACHE_DETAIL_MS,
-      )
+        if (streams.length || videos.length) {
+          cache.set(cacheKey, detail, CACHE_DETAIL_MS)
+        }
+        logger.info?.('f2media detail', {
+          pagePath,
+          streams: streams.length,
+          videos: videos.length,
+        })
+        return detail
+      } catch (err) {
+        logger.warn?.('f2media detail failed', { message: err.message })
+        return null
+      }
     },
 
     async getStreams(detail, videoCtx = null) {
@@ -297,15 +323,13 @@ function mapItems(parsed) {
 }
 
 async function fetchHtml(http, url, ctx, cache, cacheKey) {
-  return cache.wrap(
-    cacheKey,
-    async () => {
-      const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 15_000 })
-      if (!res.ok) return null
-      return res.text()
-    },
-    CACHE_HTML_MS,
-  )
+  const hit = cache.get(cacheKey)
+  if (typeof hit === 'string' && hit.length > 100) return hit
+  const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 12_000 })
+  if (!res.ok) return null
+  const text = await res.text()
+  cache.set(cacheKey, text, CACHE_HTML_MS)
+  return text
 }
 
 export default createF2MediaProvider

@@ -1,10 +1,10 @@
 /**
- * HttpClient with timeout, size limit, SSRF validation, browser UA, polite spacing.
+ * HttpClient — timeout, size limit, SSRF. Parallel-safe with light spacing per host.
  */
 
 import { validateFetchUrl } from './ssrf.js'
 
-const DEFAULT_TIMEOUT_MS = 15_000
+const DEFAULT_TIMEOUT_MS = 12_000
 const DEFAULT_MAX_BYTES = 2.5 * 1024 * 1024
 const MAX_REDIRECTS = 5
 
@@ -14,31 +14,39 @@ const BROWSER_UA =
 export function createHttpClient(opts = {}) {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES
-  const minGapMs = opts.minGapMs ?? 120
-  let lastAt = 0
-  let chain = Promise.resolve()
+  // Soft limit concurrent outbound (not a full serial queue)
+  const maxConcurrent = opts.maxConcurrent ?? 6
+  let active = 0
+  const waiters = []
 
   const defaultHeaders = opts.defaultHeaders ?? {
     'User-Agent': BROWSER_UA,
     Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
     'Accept-Language': 'fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Cache-Control': 'no-cache',
   }
 
-  async function throttle() {
-    const wait = Math.max(0, minGapMs - (Date.now() - lastAt))
-    if (wait) await new Promise((r) => setTimeout(r, wait))
-    lastAt = Date.now()
+  async function slot() {
+    if (active < maxConcurrent) {
+      active++
+      return
+    }
+    await new Promise((resolve) => waiters.push(resolve))
+    active++
+  }
+
+  function release() {
+    active--
+    const next = waiters.shift()
+    if (next) next()
   }
 
   async function request(url, init = {}) {
-    // Serialize outbound requests slightly to avoid looking like a scraper burst
-    const run = chain.then(async () => {
-      await throttle()
-      return requestOnce(url, init)
-    })
-    chain = run.catch(() => {})
-    return run
+    await slot()
+    try {
+      return await requestOnce(url, init)
+    } finally {
+      release()
+    }
   }
 
   async function requestOnce(url, init = {}) {

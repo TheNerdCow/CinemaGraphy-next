@@ -17,7 +17,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.2.4'
+const VERSION = process.env.ADDON_VERSION || '0.2.5'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -59,7 +59,7 @@ function createApp() {
       capabilities: p.capabilities,
     }))
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
-    res.setHeader('Cache-Control', 'public, max-age=60')
+    res.setHeader('Cache-Control', 'public, max-age=30')
     res.json(buildStremioManifest(config, providers))
   }
 
@@ -69,7 +69,7 @@ function createApp() {
 <style>body{font-family:system-ui;background:#0b0d12;color:#e8eaef;padding:2rem}
 a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radius:12px;padding:1.5rem;border:1px solid #243044}</style></head>
 <body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
-<p>پوستر فقط Cinemeta/metahub.</p>
+<p>استریم/سرچ اول؛ پوستر کاتالوگ اختیاری.</p>
 <ul><li><a href="/manifest.json">manifest</a></li><li><a href="/health">health</a></li></ul></div></body></html>`)
   })
 
@@ -112,7 +112,7 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
         return
       }
       try {
-        const items = await provider.search(search, { config, timeoutMs: 15_000 })
+        const items = await provider.search(search, { config, timeoutMs: 12_000 })
         const wantType = type === 'series' ? 'series' : 'movie'
         res.json({ metas: toMetas(items, providerKey, wantType) })
       } catch (err) {
@@ -129,8 +129,7 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
         return
       }
       try {
-        const items = await provider.browse(id, { config, skip, timeoutMs: 15_000 })
-        res.setHeader('Cache-Control', 'public, max-age=60')
+        const items = await provider.browse(id, { config, skip, timeoutMs: 12_000 })
         res.json({ metas: toMetas(items, 'f2media', type) })
       } catch (err) {
         log.warn('catalog browse error', { message: err.message })
@@ -183,35 +182,38 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
       res.json({ meta: null })
       return
     }
-    const detail = await provider.getDetail(parsed.itemId, req.params.type, { config })
-    if (!detail) {
+    try {
+      const detail = await provider.getDetail(parsed.itemId, req.params.type, { config })
+      if (!detail) {
+        res.json({ meta: null })
+        return
+      }
+      const metaId = toStremioProviderId(parsed.providerKey, parsed.itemId)
+      const meta = {
+        id: metaId,
+        type: detail.type || req.params.type,
+        name: detail.title || id,
+        poster: detail.poster,
+        background: detail.background || detail.poster,
+        description: detail.description,
+        releaseInfo: detail.year ? String(detail.year) : undefined,
+        genres: detail.genres,
+        imdbRating: detail.imdbRating,
+        runtime: detail.runtime,
+      }
+      if (detail.type === 'series' && detail.videos?.length) {
+        meta.videos = detail.videos.map((v) => ({
+          id: `${metaId}:${v.season}:${v.episode}`,
+          title: v.title || `S${v.season}E${v.episode}`,
+          season: v.season,
+          episode: v.episode,
+        }))
+      }
+      res.json({ meta })
+    } catch (err) {
+      log.warn('meta error', { message: err.message })
       res.json({ meta: null })
-      return
     }
-
-    const metaId = toStremioProviderId(parsed.providerKey, parsed.itemId)
-    const meta = {
-      id: metaId,
-      type: detail.type || req.params.type,
-      name: detail.title || id,
-      poster: detail.poster,
-      background: detail.background || detail.poster,
-      description: detail.description,
-      releaseInfo: detail.year ? String(detail.year) : undefined,
-      genres: detail.genres,
-      imdbRating: detail.imdbRating,
-      runtime: detail.runtime,
-    }
-    if (detail.type === 'series' && detail.videos?.length) {
-      meta.videos = detail.videos.map((v) => ({
-        id: `${metaId}:${v.season}:${v.episode}`,
-        title: v.title || `S${v.season}E${v.episode}`,
-        season: v.season,
-        episode: v.episode,
-      }))
-    }
-    res.setHeader('Cache-Control', 'public, max-age=180')
-    res.json({ meta })
   })
 
   app.get('/stream/:type/:id.json', async (req, res) => {
@@ -227,22 +229,27 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
       res.json({ streams: [] })
       return
     }
-    const detail = await provider.getDetail(parsed.itemId, req.params.type, { config })
-    if (!detail) {
+    try {
+      const detail = await provider.getDetail(parsed.itemId, req.params.type, { config })
+      if (!detail) {
+        res.json({ streams: [] })
+        return
+      }
+      const streams = await provider.getStreams(detail, {
+        season: parsed.season,
+        episode: parsed.episode,
+      })
+      res.json({
+        streams: (streams || []).map((s) => ({
+          name: s.name || s.quality || 'HD',
+          title: s.title,
+          url: s.url,
+        })),
+      })
+    } catch (err) {
+      log.warn('stream error', { message: err.message })
       res.json({ streams: [] })
-      return
     }
-    const streams = await provider.getStreams(detail, {
-      season: parsed.season,
-      episode: parsed.episode,
-    })
-    res.json({
-      streams: (streams || []).map((s) => ({
-        name: s.name || s.quality || 'HD',
-        title: s.title,
-        url: s.url,
-      })),
-    })
   })
 
   return app
