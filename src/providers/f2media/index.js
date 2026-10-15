@@ -1,11 +1,13 @@
 /**
- * F2Media — multi-query search, stream-first detail, optional TMDB + Cinemeta posters.
+ * F2Media provider — restored simple path that worked early on.
+ * - Streams always from site HTML (priority)
+ * - Posters from Cinemeta/metahub (permissive for images only; never rename)
+ * - TMDB optional, only if TMDB_API_KEY set (not required)
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
 import { createHttpClient } from '../../core/http/client.js'
 import { createMemoryCache } from '../../core/cache/memory.js'
-import { isStrictTitleMatch, isPosterMatch } from '../../core/meta/match.js'
 import {
   createCinemetaClient,
   metahubPoster,
@@ -28,112 +30,79 @@ import {
 
 const DEFAULT_BASE = 'https://www.film2med.top'
 const PAGE_SIZE = 16
-const CACHE_LIST_MS = 10 * 60_000
-const CACHE_DETAIL_MS = 12 * 60_000
-const CACHE_HTML_MS = 8 * 60_000
-const CACHE_POSTER_MS = 24 * 60_000
+const CACHE_LIST_MS = 8 * 60_000
+const CACHE_DETAIL_MS = 10 * 60_000
+const CACHE_HTML_MS = 6 * 60_000
+const CACHE_META_MS = 30 * 60_000
 
 export function createF2MediaProvider(deps = {}) {
-  const http = deps.http || createHttpClient({ maxConcurrent: 5, timeoutMs: 14_000 })
-  const metaHttp = deps.metaHttp || createHttpClient({ maxConcurrent: 5, timeoutMs: 5_000 })
+  const http = deps.http || createHttpClient({ maxConcurrent: 6, timeoutMs: 15_000 })
+  const metaHttp = deps.metaHttp || createHttpClient({ maxConcurrent: 6, timeoutMs: 6_000 })
   const logger = deps.logger || console
   const cinemeta = deps.cinemeta || createCinemetaClient({ http: metaHttp })
   const tmdb = deps.tmdb || createTmdbClient({ http: metaHttp })
   const cache = deps.cache || createMemoryCache(CACHE_LIST_MS)
 
-  async function resolveImages(title, year, type) {
+  /**
+ * Permissive image lookup — same spirit as first working version.
+ * Uses first solid Cinemeta hit; does NOT change the display title.
+ */
+  async function lookupImages(title, year, type) {
     if (!title) return {}
-    const key = `img:${type}:${title}:${year || ''}`
+    const key = `meta:${type}:${title}:${year || ''}`
     const cached = cache.get(key)
     if (cached !== undefined) return cached
 
-    const out = {}
     const t = type === 'series' ? 'series' : 'movie'
+    const out = {}
 
-    // 1) TMDB if configured (best posters/backdrops)
+    // Optional TMDB (only if key present)
     if (tmdb.enabled) {
       try {
-        const q = year ? `${title}` : title
-        const row = await Promise.race([
-          tmdb.search(q, t),
-          new Promise((r) => setTimeout(() => r(null), 4000)),
-        ])
-        if (row && isPosterMatch(title, row.name, year, row.year)) {
+        const row = await withTimeout(tmdb.search(title, t), 4000)
+        if (row?.poster) {
           out.poster = row.poster
-          out.background = row.background
+          out.background = row.background || row.poster
           out.imdb = row.imdb
           out.description = row.description
-          out.genres = row.genres
-          out.imdbRating = row.imdbRating
-          out.source = 'tmdb'
         }
       } catch {
         /* ignore */
       }
     }
 
-    // 2) Cinemeta / metahub fallback
+    // Cinemeta (primary, like day one)
     if (!out.poster) {
       try {
         const q = year ? `${title} ${year}` : title
-        const found = await Promise.race([
-          cinemeta.search(q, t),
-          new Promise((r) => setTimeout(() => r(null), 3500)),
-        ])
-        if (found?.imdb && isPosterMatch(title, found.name, year, found.year)) {
+        const found = await withTimeout(cinemeta.search(q, t), 5000)
+        if (found?.imdb) {
           out.poster = metahubPoster(found.imdb) || found.poster
           out.background = metahubBackground(found.imdb) || found.background || out.poster
           out.imdb = found.imdb
           if (!out.description) out.description = found.description
-          if (!out.genres) out.genres = found.genres
-          if (!out.imdbRating) out.imdbRating = found.imdbRating
-          out.source = 'cinemeta'
+          out.genres = found.genres
+          out.imdbRating = found.imdbRating
         }
       } catch {
         /* ignore */
       }
     }
 
-    cache.set(key, out, CACHE_POSTER_MS)
+    cache.set(key, out, CACHE_META_MS)
     return out
   }
 
-  async function attachImages(items, limit = 14) {
-    const slice = items.slice(0, limit)
+  async function enrichList(items, limit = 16) {
+    const n = Math.min(items.length, limit)
     await Promise.all(
-      slice.map(async (it) => {
-        const img = await resolveImages(it.title, it.year, it.type)
+      items.slice(0, n).map(async (it) => {
+        const img = await lookupImages(it.title, it.year, it.type)
         if (img.poster) it.poster = img.poster
         if (img.imdb) it.imdb = img.imdb
       }),
     )
     return items
-  }
-
-  /** Multiple query variants to catch titles F2 search misses */
-  function searchQueries(raw) {
-    const q = String(raw || '').trim()
-    if (!q) return []
-    const set = new Set()
-    set.add(q)
-    // without year
-    const noYear = q.replace(/\b(19|20)\d{2}\b/g, '').replace(/\s+/g, ' ').trim()
-    if (noYear && noYear !== q) set.add(noYear)
-    // first 3-5 significant words
-    const words = noYear.split(/\s+/).filter(Boolean)
-    if (words.length > 3) set.add(words.slice(0, 3).join(' '))
-    if (words.length > 4) set.add(words.slice(0, 4).join(' '))
-    // hyphen/colon variants
-    set.add(q.replace(/:/g, ' ').replace(/\s+/g, ' ').trim())
-    set.add(q.replace(/-/g, ' ').replace(/\s+/g, ' ').trim())
-    return [...set].filter((s) => s.length >= 2).slice(0, 4)
-  }
-
-  async function searchOnce(base, q, timeoutMs) {
-    const url = `${base}/?s=${encodeURIComponent(q)}`
-    const res = await http.get(url, { timeoutMs })
-    if (!res.ok) return []
-    return parseSearchHtml(await res.text(), base)
   }
 
   return {
@@ -170,29 +139,29 @@ export function createF2MediaProvider(deps = {}) {
       const base = this.baseUrl(ctx.config || {})
       const cacheKey = `search:${base}:${q.toLowerCase()}`
       const hit = cache.get(cacheKey)
-      if (hit) return hit
+      if (Array.isArray(hit)) return hit
 
       try {
-        const variants = searchQueries(q)
-        const merged = []
-        const seen = new Set()
-        for (const v of variants) {
-          try {
-            const rows = await searchOnce(base, v, ctx.timeoutMs || 12_000)
-            for (const r of rows) {
-              if (seen.has(r.pagePath)) continue
-              seen.add(r.pagePath)
-              merged.push(r)
-            }
-            if (merged.length >= 8) break
-          } catch {
-            /* try next variant */
+        const url = `${base}/?s=${encodeURIComponent(q)}`
+        const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 15_000 })
+        if (!res.ok) return []
+        let parsed = parseSearchHtml(await res.text(), base)
+
+        // one fallback without year if empty
+        if (parsed.length === 0) {
+          const q2 = q.replace(/\b(19|20)\d{2}\b/g, '').replace(/\s+/g, ' ').trim()
+          if (q2 && q2 !== q) {
+            const res2 = await http.get(`${base}/?s=${encodeURIComponent(q2)}`, {
+              timeoutMs: ctx.timeoutMs || 12_000,
+            })
+            if (res2.ok) parsed = parseSearchHtml(await res2.text(), base)
           }
         }
-        const items = mapItems(merged)
-        await attachImages(items, 12)
+
+        const items = mapItems(parsed)
+        await enrichList(items, 14)
         cache.set(cacheKey, items, CACHE_LIST_MS)
-        logger.info?.('f2media search', { q, variants: variants.length, count: items.length })
+        logger.info?.('f2media search', { q, count: items.length, posters: items.filter((i) => i.poster).length })
         return items
       } catch (err) {
         logger.warn?.('f2media search failed', { message: err.message })
@@ -208,31 +177,32 @@ export function createF2MediaProvider(deps = {}) {
       const page = Math.floor(skip / PAGE_SIZE) + 1
       const cacheKey = `browse:${base}:${catalogId}:${page}`
       const hit = cache.get(cacheKey)
-      if (hit) return hit
+      if (Array.isArray(hit)) return hit
 
       try {
         let parsed = []
-        if (page === 1 && cat.homeRail) {
+        // Prefer category/list URL (more reliable posters context than homepage rail alone)
+        const listUrl = catalogListUrl(base, cat, page)
+        const listHtml = await fetchHtml(http, listUrl, ctx, cache, `html:${listUrl}`)
+        if (listHtml) parsed = parseListingHtml(listHtml, base)
+
+        if (parsed.length === 0 && page === 1 && cat.homeRail) {
           const homeHtml = await fetchHtml(http, base + '/', ctx, cache, `html:${base}:home`)
           if (homeHtml) parsed = parseHomeRail(homeHtml, base, cat.homeRail)
         }
-        if (parsed.length === 0) {
-          const url = catalogListUrl(base, cat, page)
-          const html = await fetchHtml(http, url, ctx, cache, `html:${url}`)
-          if (html) parsed = parseListingHtml(html, base)
-        }
+
         parsed = parsed.filter(
           (it) => it.type === cat.type || cat.id === 'f2media_coming_soon',
         )
+
         const items = mapItems(parsed.slice(0, 24))
-        await attachImages(items, 16)
+        await enrichList(items, 18)
         cache.set(cacheKey, items, CACHE_LIST_MS)
         logger.info?.('f2media browse', {
           catalogId,
           page,
           count: items.length,
           posters: items.filter((i) => i.poster).length,
-          tmdb: tmdb.enabled,
         })
         return items
       } catch (err) {
@@ -243,39 +213,50 @@ export function createF2MediaProvider(deps = {}) {
 
     async getDetail(itemId, type, ctx = {}) {
       const pagePath = decodePageId(itemId)
-      if (!pagePath) return null
+      if (!pagePath) {
+        logger.warn?.('bad itemId', { itemId })
+        return null
+      }
       const base = this.baseUrl(ctx.config || {})
       const cacheKey = `detail:${base}:${pagePath}`
       const hit = cache.get(cacheKey)
-      if (hit && ((hit.streams && hit.streams.length) || (hit.videos && hit.videos.length))) {
-        return hit
-      }
+      if (hit && hit.streams && hit.streams.length > 0) return hit
+      if (hit && hit.videos && hit.videos.length > 0) return hit
 
       try {
-        const res = await http.get(`${base}/${pagePath}`, {
-          timeoutMs: ctx.timeoutMs || 14_000,
-        })
-        if (!res.ok) return null
+        const pageUrl = `${base}/${pagePath}`
+        const res = await http.get(pageUrl, { timeoutMs: ctx.timeoutMs || 15_000 })
+        if (!res.ok) {
+          logger.warn?.('detail HTTP', { status: res.status, pageUrl })
+          return null
+        }
         const html = await res.text()
         const meta = parseDetailMeta(html, base)
 
+        // Series only if path or explicit type says so — movies must stay movies
         const isSeries =
-          type === 'series' || meta.type === 'series' || /\/series\//i.test(pagePath)
+          type === 'series' ||
+          /\/series\//i.test(pagePath) ||
+          (meta.type === 'series' && /\/series\//i.test(pagePath))
 
         let streams = []
         let episodes = []
         let videos = []
+
         if (isSeries) {
           const parsed = parseSeriesEpisodes(html, base)
           episodes = parsed.episodes
           videos = parsed.videos
           streams = episodes.flatMap((e) => e.streams)
+          // fallback: some series pages use movie-style download-list
+          if (streams.length === 0) {
+            streams = parseDetailStreams(html, base)
+          }
         } else {
           streams = parseDetailStreams(html, base)
         }
 
-        // Images AFTER streams — never block playback
-        const img = await resolveImages(
+        const img = await lookupImages(
           meta.title,
           meta.year,
           isSeries ? 'series' : 'movie',
@@ -298,33 +279,43 @@ export function createF2MediaProvider(deps = {}) {
           videos,
         }
 
-        if (streams.length || videos.length) {
-          cache.set(cacheKey, detail, CACHE_DETAIL_MS)
-        }
+        // Cache even with 0 streams briefly to avoid stampede; short TTL
+        cache.set(
+          cacheKey,
+          detail,
+          streams.length || videos.length ? CACHE_DETAIL_MS : 60_000,
+        )
+
         logger.info?.('f2media detail', {
           pagePath,
+          type: detail.type,
           streams: streams.length,
           videos: videos.length,
           poster: Boolean(detail.poster),
         })
         return detail
       } catch (err) {
-        logger.warn?.('f2media detail failed', { message: err.message })
+        logger.warn?.('f2media detail failed', { message: err.message, itemId })
         return null
       }
     },
 
     async getStreams(detail, videoCtx = null) {
+      if (!detail) return []
       const season = videoCtx?.season
       const episode = videoCtx?.episode
-      if (detail?.type === 'series' && season != null && episode != null) {
+
+      if (detail.type === 'series' && season != null && episode != null) {
         const ep = (detail.episodes || []).find(
-          (e) => e.season === Number(season) && e.episode === Number(episode),
+          (e) => Number(e.season) === Number(season) && Number(e.episode) === Number(episode),
         )
-        if (!ep?.streams?.length) return []
-        return ep.streams.map(toStream)
+        if (ep?.streams?.length) return ep.streams.map(toStream)
+        // fallback all movie-style streams on series page
+        if (detail.streams?.length) return detail.streams.map(toStream)
+        return []
       }
-      if (!detail?.streams?.length) return []
+
+      if (!detail.streams?.length) return []
       return detail.streams.map(toStream)
     },
 
@@ -364,12 +355,19 @@ function mapItems(parsed) {
 
 async function fetchHtml(http, url, ctx, cache, cacheKey) {
   const hit = cache.get(cacheKey)
-  if (typeof hit === 'string' && hit.length > 100) return hit
-  const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 12_000 })
+  if (typeof hit === 'string' && hit.length > 500) return hit
+  const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 15_000 })
   if (!res.ok) return null
   const text = await res.text()
-  cache.set(cacheKey, text, CACHE_HTML_MS)
+  if (text && text.length > 500) cache.set(cacheKey, text, CACHE_HTML_MS)
   return text
+}
+
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(null), ms)),
+  ])
 }
 
 export default createF2MediaProvider

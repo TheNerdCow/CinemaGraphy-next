@@ -17,7 +17,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.2.6'
+const VERSION = process.env.ADDON_VERSION || '0.2.7'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -59,7 +59,7 @@ function createApp() {
       capabilities: p.capabilities,
     }))
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
-    res.setHeader('Cache-Control', 'public, max-age=30')
+    res.setHeader('Cache-Control', 'no-store')
     res.json(buildStremioManifest(config, providers))
   }
 
@@ -67,22 +67,19 @@ function createApp() {
     res.type('html').send(`<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"/>
 <title>CinemaGraphy Next</title>
 <style>body{font-family:system-ui;background:#0b0d12;color:#e8eaef;padding:2rem}
-a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radius:12px;padding:1.5rem;border:1px solid #243044}
-code{background:#1a1f2b;padding:.1rem .35rem;border-radius:4px}</style></head>
+a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radius:12px;padding:1.5rem;border:1px solid #243044}</style></head>
 <body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
-<p>جست‌وجوی چندواریانت + TMDB اختیاری (<code>TMDB_API_KEY</code>).</p>
+<p>حالت پایدار: استریم از سایت + پوستر Cinemeta.</p>
 <ul><li><a href="/manifest.json">manifest</a></li><li><a href="/health">health</a></li></ul></div></body></html>`)
   })
 
   app.get('/health', (_req, res) => {
     const config = configFromEnv(process.env)
-    const f2 = getProvider('f2media')
     res.json({
       ok: true,
       service: 'cinemagraphy-next',
       version: VERSION,
       providers: listEnabledProviders(config).map((p) => p.key),
-      tmdb: Boolean(f2?.capabilities?.tmdb),
       time: new Date().toISOString(),
     })
   })
@@ -115,7 +112,7 @@ code{background:#1a1f2b;padding:.1rem .35rem;border-radius:4px}</style></head>
         return
       }
       try {
-        const items = await provider.search(search, { config, timeoutMs: 14_000 })
+        const items = await provider.search(search, { config, timeoutMs: 15_000 })
         const wantType = type === 'series' ? 'series' : 'movie'
         res.json({ metas: toMetas(items, providerKey, wantType) })
       } catch (err) {
@@ -132,7 +129,7 @@ code{background:#1a1f2b;padding:.1rem .35rem;border-radius:4px}</style></head>
         return
       }
       try {
-        const items = await provider.browse(id, { config, skip, timeoutMs: 14_000 })
+        const items = await provider.browse(id, { config, skip, timeoutMs: 15_000 })
         res.json({ metas: toMetas(items, 'f2media', type) })
       } catch (err) {
         log.warn('catalog browse error', { message: err.message })
@@ -242,6 +239,7 @@ code{background:#1a1f2b;padding:.1rem .35rem;border-radius:4px}</style></head>
         season: parsed.season,
         episode: parsed.episode,
       })
+      log.info('stream response', { id, count: (streams || []).length })
       res.json({
         streams: (streams || []).map((s) => ({
           name: s.name || s.quality || 'HD',
