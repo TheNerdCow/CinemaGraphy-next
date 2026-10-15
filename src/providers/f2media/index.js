@@ -1,5 +1,5 @@
 /**
- * F2Media provider — site-first posters, strict Cinemeta, TTL cache, polite fetch.
+ * F2Media provider — posters only from Cinemeta/metahub (strict title match).
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
@@ -19,7 +19,6 @@ import {
 } from './parse.js'
 import { parseListingHtml, parseHomeRail } from './parse-listing.js'
 import { parseSeriesEpisodes } from './parse-series.js'
-import { extractPosterFromHtml } from './poster.js'
 import {
   getCatalogById,
   toManifestCatalogs,
@@ -28,15 +27,68 @@ import {
 
 const DEFAULT_BASE = 'https://www.film2med.top'
 const PAGE_SIZE = 16
-const CACHE_LIST_MS = 12 * 60_000
+const CACHE_LIST_MS = 15 * 60_000
 const CACHE_DETAIL_MS = 20 * 60_000
-const CACHE_HTML_MS = 10 * 60_000
+const CACHE_HTML_MS = 12 * 60_000
+const CACHE_POSTER_MS = 24 * 60_000
 
 export function createF2MediaProvider(deps = {}) {
-  const http = deps.http || createHttpClient({ minGapMs: 150 })
+  const http = deps.http || createHttpClient({ minGapMs: 120 })
   const logger = deps.logger || console
   const cinemeta = deps.cinemeta || createCinemetaClient({ http })
   const cache = deps.cache || createMemoryCache(CACHE_LIST_MS)
+
+  async function resolvePoster(title, year, type) {
+    if (!title) return { poster: undefined, imdb: undefined }
+    const key = `poster:${type || 'movie'}:${title}:${year || ''}`
+    return cache.wrap(
+      key,
+      async () => {
+        try {
+          const q = year ? `${title} ${year}` : title
+          const found = await cinemeta.search(q, type === 'series' ? 'series' : 'movie')
+          if (!found?.imdb) return { poster: undefined, imdb: undefined }
+          if (!isStrictTitleMatch(title, found.name, year)) {
+            return { poster: undefined, imdb: undefined }
+          }
+          return {
+            poster: metahubPoster(found.imdb) || found.poster,
+            imdb: found.imdb,
+            background: metahubBackground(found.imdb) || found.background,
+            description: found.description,
+            genres: found.genres,
+            imdbRating: found.imdbRating,
+            runtime: found.runtime,
+            name: found.name,
+          }
+        } catch {
+          return { poster: undefined, imdb: undefined }
+        }
+      },
+      CACHE_POSTER_MS,
+    )
+  }
+
+  async function withCinemetaPosters(items) {
+    // Limit concurrency to keep light
+    const out = []
+    const chunk = 4
+    for (let i = 0; i < items.length; i += chunk) {
+      const slice = items.slice(i, i + chunk)
+      const part = await Promise.all(
+        slice.map(async (it) => {
+          const cm = await resolvePoster(it.title, it.year, it.type)
+          return {
+            ...it,
+            poster: cm.poster,
+            imdb: cm.imdb,
+          }
+        }),
+      )
+      out.push(...part)
+    }
+    return out
+  }
 
   return {
     key: 'f2media',
@@ -76,7 +128,8 @@ export function createF2MediaProvider(deps = {}) {
             timeoutMs: ctx.timeoutMs || 15_000,
           })
           if (!res.ok) return []
-          return mapItems(parseSearchHtml(await res.text(), base))
+          const parsed = mapItems(parseSearchHtml(await res.text(), base))
+          return withCinemetaPosters(parsed.slice(0, 20))
         },
         CACHE_LIST_MS,
       )
@@ -105,13 +158,15 @@ export function createF2MediaProvider(deps = {}) {
           parsed = parsed.filter(
             (it) => it.type === cat.type || cat.id === 'f2media_coming_soon',
           )
+          const items = mapItems(parsed.slice(0, 24))
+          const withPosters = await withCinemetaPosters(items)
           logger.info?.('f2media browse', {
             catalogId,
             page,
-            count: parsed.length,
-            withPoster: parsed.filter((p) => p.poster).length,
+            count: withPosters.length,
+            withPoster: withPosters.filter((p) => p.poster).length,
           })
-          return mapItems(parsed.slice(0, 30))
+          return withPosters
         },
         CACHE_LIST_MS,
       )
@@ -131,8 +186,6 @@ export function createF2MediaProvider(deps = {}) {
           if (!res.ok) return null
           const html = await res.text()
           const meta = parseDetailMeta(html, base)
-          // Site poster first (intocdn / cover)
-          const sitePoster = extractPosterFromHtml(html, base) || meta.poster
 
           const isSeries =
             type === 'series' || meta.type === 'series' || /\/series\//i.test(pagePath)
@@ -149,42 +202,43 @@ export function createF2MediaProvider(deps = {}) {
             streams = parseDetailStreams(html, base)
           }
 
-          let enriched = null
+          // Cinemeta for poster + optional plot — strict match only; never replace wrong title
+          let cm = null
           if (meta.imdb) {
             const byId = await cinemeta.byImdb(meta.imdb, isSeries ? 'series' : 'movie')
-            if (byId && isStrictTitleMatch(meta.title, byId.name, meta.year)) enriched = byId
+            if (byId && (!meta.title || isStrictTitleMatch(meta.title, byId.name, meta.year))) {
+              cm = byId
+            }
           }
-          if (!enriched && meta.title) {
-            const q = meta.year ? `${meta.title} ${meta.year}` : meta.title
-            const found = await cinemeta.search(q, isSeries ? 'series' : 'movie')
-            if (found && isStrictTitleMatch(meta.title, found.name, meta.year)) {
-              enriched = found
+          if (!cm && meta.title) {
+            cm = await resolvePoster(meta.title, meta.year, isSeries ? 'series' : 'movie')
+            // resolvePoster returns partial; normalize
+            if (cm && !cm.name && cm.imdb) {
+              const full = await cinemeta.byImdb(cm.imdb, isSeries ? 'series' : 'movie')
+              if (full) cm = { ...cm, ...full }
             }
           }
 
-          const imdb = enriched?.imdb || meta.imdb
-          // Poster priority: site (intocdn) → metahub → cinemeta
-          const poster =
-            sitePoster || (imdb && metahubPoster(imdb)) || enriched?.poster
+          const imdb = cm?.imdb || meta.imdb
+          const poster = (imdb && metahubPoster(imdb)) || cm?.poster
           const background =
-            sitePoster || (imdb && metahubBackground(imdb)) || enriched?.background || poster
+            (imdb && metahubBackground(imdb)) || cm?.background || poster
 
           return {
             id: itemId,
             pagePath,
             type: isSeries ? 'series' : 'movie',
-            title: meta.title || enriched?.name,
-            year: meta.year || (enriched?.year ? parseInt(String(enriched.year), 10) : undefined),
+            title: meta.title || cm?.name,
+            year: meta.year || (cm?.year ? parseInt(String(cm.year), 10) : undefined),
             imdb,
             poster,
             background,
             description:
-              (enriched?.description && enriched.description.length > 40
-                ? enriched.description
-                : null) || meta.description,
-            genres: enriched?.genres,
-            imdbRating: enriched?.imdbRating,
-            runtime: enriched?.runtime,
+              (cm?.description && String(cm.description).length > 40 ? cm.description : null) ||
+              meta.description,
+            genres: cm?.genres,
+            imdbRating: cm?.imdbRating,
+            runtime: cm?.runtime,
             streams,
             episodes,
             videos,
@@ -236,7 +290,7 @@ function mapItems(parsed) {
     type: item.type,
     title: item.title,
     year: item.year,
-    poster: item.poster,
+    poster: undefined,
     providerKey: 'f2media',
     externalRefs: { pagePath: item.pagePath },
   }))
