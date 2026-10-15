@@ -4,6 +4,7 @@
 
 import cors from 'cors'
 import express from 'express'
+import { loadEnvFile } from './load-env.js'
 import { configFromEnv, decodeUserConfig, applyMode, redactSecrets } from '../../core/config/app-config.js'
 import { createLogger } from '../../core/logging/logger.js'
 import { buildStremioManifest } from '../../clients/stremio/manifest.js'
@@ -12,8 +13,12 @@ import { stubExampleProvider } from '../../providers/stub-example.js'
 import { createF2MediaProvider } from '../../providers/f2media/index.js'
 import { fromStremioProviderId, toStremioProviderId } from '../../core/ids/namespace.js'
 
+// Optional — no error if .env does not exist
+loadEnvFile('.env')
+
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
+const VERSION = process.env.ADDON_VERSION || '0.1.3'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -32,7 +37,6 @@ function resolveConfig(req) {
   })
 }
 
-/** Stremio extra path segment → object (search=foo&skip=0) */
 function parseExtra(raw) {
   if (!raw) return {}
   try {
@@ -68,12 +72,12 @@ function createApp() {
 <style>body{font-family:system-ui,sans-serif;background:#0b0d12;color:#e8eaef;margin:0;padding:2rem;line-height:1.6}
 a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
 .card{max-width:42rem;margin:auto;background:#12161f;border:1px solid #243044;border-radius:12px;padding:1.5rem}</style></head>
-<body><div class="card"><h1>سینماگرافی Next</h1>
-<p>F2Media به‌صورت پیش‌فرض فعال است. production روی <code>cmplugin.ir</code> دست نخورده.</p>
+<body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
+<p>F2Media پیش‌فرض فعال. فایل <code>.env</code> اختیاری است.</p>
 <ul>
 <li><a href="/manifest.json">manifest.json</a></li>
 <li><a href="/health">health</a></li>
-<li>تست جست‌وجو: <a href="/catalog/movie/f2media_movies/search=matrix.json"><code>/catalog/movie/f2media_movies/search=matrix.json</code></a></li>
+<li><a href="/catalog/movie/f2media_movies/search=matrix.json">تست جست‌وجو matrix</a></li>
 </ul></div></body></html>`)
   })
 
@@ -83,7 +87,7 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
     res.json({
       ok: true,
       service: 'cinemagraphy-next',
-      version: process.env.ADDON_VERSION || '0.1.2',
+      version: VERSION,
       providers: enabled,
       time: new Date().toISOString(),
     })
@@ -95,7 +99,6 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
   async function catalogHandler(req, res) {
     const config = resolveConfig(req)
     const type = req.params.type
-    // id may include trailing .json when matched by wildcard-style routes
     let id = String(req.params.id || '').replace(/\.json$/i, '')
     const extraRaw =
       req.params.extraArgs ||
@@ -107,12 +110,7 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
     log.info('catalog request', { type, id, extraRaw, search })
 
     const m = id.match(/^([a-z0-9]+)_(movies|series)$/i)
-    if (!m) {
-      res.json({ metas: [] })
-      return
-    }
-    if (!search) {
-      // search-required catalogs: empty without query is correct
+    if (!m || !search) {
       res.json({ metas: [] })
       return
     }
@@ -150,7 +148,6 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
     }
   }
 
-  // Multiple route shapes — Express param quirks with ".json"
   app.get('/catalog/:type/:id/:extraArgs.json', catalogHandler)
   app.get('/catalog/:type/:id/:extraArgs', catalogHandler)
   app.get('/catalog/:type/:id.json', catalogHandler)
@@ -212,20 +209,12 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
     })
   })
 
-  app.get('/debug/config', (req, res) => {
-    if (process.env.DEV_MODE !== '1' && process.env.NODE_ENV === 'production') {
-      res.status(404).end()
-      return
-    }
-    res.json(redactSecrets(resolveConfig(req)))
-  })
-
   return app
 }
 
 const app = createApp()
 app.listen(PORT, () => {
-  log.info('cinemagraphy-next listening', { port: PORT })
+  log.info('cinemagraphy-next listening', { port: PORT, version: VERSION })
 })
 
 export { createApp, resolveConfig }
