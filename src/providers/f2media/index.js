@@ -4,7 +4,11 @@
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
 import { createHttpClient } from '../../core/http/client.js'
-import { createCinemetaClient } from '../../core/meta/cinemeta.js'
+import {
+  createCinemetaClient,
+  metahubPoster,
+  metahubBackground,
+} from '../../core/meta/cinemeta.js'
 import {
   parseSearchHtml,
   parseDetailStreams,
@@ -56,10 +60,7 @@ export function createF2MediaProvider(deps = {}) {
           timeoutMs: ctx.timeoutMs || 15_000,
           headers: { 'Accept-Language': 'fa-IR,fa;q=0.9,en;q=0.8' },
         })
-        if (!res.ok) {
-          logger.warn?.('f2media search non-OK', { status: res.status, url })
-          return []
-        }
+        if (!res.ok) return []
         const html = await res.text()
         const parsed = parseSearchHtml(html, base)
         logger.info?.('f2media search', { q, count: parsed.length })
@@ -90,7 +91,6 @@ export function createF2MediaProvider(deps = {}) {
         const meta = parseDetailMeta(html, base)
         const streams = parseDetailStreams(html, base)
 
-        // Cinemeta first for plot / poster / rating (site descriptions are SEO spam)
         let enriched = null
         if (meta.imdb) {
           enriched = await cinemeta.byImdb(meta.imdb, type || meta.type)
@@ -100,16 +100,22 @@ export function createF2MediaProvider(deps = {}) {
           enriched = await cinemeta.search(q, type || meta.type)
         }
 
+        const imdb = meta.imdb || enriched?.imdb
+        // Always prefer metahub posters (IR-friendly vs site CDN / schema)
+        const poster =
+          metahubPoster(imdb) || enriched?.poster || meta.poster
+        const background =
+          metahubBackground(imdb) || enriched?.background || poster
+
         return {
           id: itemId,
           pagePath,
           type: type || meta.type || enriched?.type || 'movie',
           title: enriched?.name || meta.title,
           year: meta.year || (enriched?.year ? parseInt(String(enriched.year), 10) : undefined),
-          imdb: meta.imdb || enriched?.imdb,
-          poster: enriched?.poster || meta.poster,
-          background: enriched?.background || enriched?.poster || meta.poster,
-          // Always prefer Cinemeta plot when present
+          imdb,
+          poster,
+          background,
           description: enriched?.description || meta.description,
           genres: enriched?.genres,
           imdbRating: enriched?.imdbRating,
@@ -126,6 +132,7 @@ export function createF2MediaProvider(deps = {}) {
       if (!detail?.streams?.length) return []
       return detail.streams.map((s) => ({
         url: s.url,
+        name: s.badge || 'HD',
         title: s.label,
         quality: s.quality,
         size: s.size,

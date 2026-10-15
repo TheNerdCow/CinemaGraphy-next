@@ -1,6 +1,6 @@
 /**
  * Cinemeta client — primary public metadata (no API key).
- * https://v3-cinemeta.strem.io
+ * Posters via images.metahub.space (works better than IR-blocked site CDNs).
  */
 
 import { createHttpClient } from '../http/client.js'
@@ -25,7 +25,6 @@ export function createCinemetaClient(deps = {}) {
       }
     },
 
-    /** Best-effort name search via Cinemeta catalog */
     async search(query, type = 'movie') {
       const q = String(query || '').trim()
       if (!q) return null
@@ -45,19 +44,39 @@ export function createCinemetaClient(deps = {}) {
   }
 }
 
+/** Prefer medium posters from metahub */
+export function upgradePosterUrl(url, imdbId) {
+  if (imdbId && /^tt\d+$/i.test(imdbId)) {
+    return `https://images.metahub.space/poster/medium/${imdbId}/img`
+  }
+  if (!url) return undefined
+  return String(url).replace('/poster/small/', '/poster/medium/')
+}
+
+export function metahubPoster(imdbId, size = 'medium') {
+  if (!imdbId || !/^tt\d+$/i.test(imdbId)) return undefined
+  return `https://images.metahub.space/poster/${size}/${imdbId}/img`
+}
+
+export function metahubBackground(imdbId) {
+  if (!imdbId || !/^tt\d+$/i.test(imdbId)) return undefined
+  return `https://images.metahub.space/background/medium/${imdbId}/img`
+}
+
 function normalize(meta) {
   if (!meta || !meta.id) return null
+  const imdb = meta.id
   return {
-    imdb: meta.id,
+    imdb,
     name: meta.name,
-    nameFa: meta.name || undefined,
     type: meta.type,
     year: meta.releaseInfo || meta.year,
-    poster: meta.poster,
-    background: meta.background || meta.poster,
+    poster: metahubPoster(imdb, 'medium') || meta.poster,
+    background: metahubBackground(imdb) || meta.background || meta.poster,
     description: meta.description,
-    genres: meta.genres,
+    genres: meta.genres || meta.genre,
     runtime: meta.runtime,
     imdbRating: meta.imdbRating,
+    moviedbId: meta.moviedb_id,
   }
 }

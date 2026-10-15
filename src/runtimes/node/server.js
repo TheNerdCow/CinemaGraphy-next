@@ -17,7 +17,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.1.5'
+const VERSION = process.env.ADDON_VERSION || '0.1.6'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -72,21 +72,17 @@ function createApp() {
 a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
 .card{max-width:42rem;margin:auto;background:#12161f;border:1px solid #243044;border-radius:12px;padding:1.5rem}</style></head>
 <body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
-<p>F2Media streams با کیفیت/دوبله + Cinemeta plot.</p>
-<ul>
-<li><a href="/manifest.json">manifest.json</a></li>
-<li><a href="/health">health</a></li>
-</ul></div></body></html>`)
+<p>استریم چندخطی + پوستر metahub.</p>
+<ul><li><a href="/manifest.json">manifest</a></li><li><a href="/health">health</a></li></ul></div></body></html>`)
   })
 
   app.get('/health', (_req, res) => {
     const config = configFromEnv(process.env)
-    const enabled = listEnabledProviders(config).map((p) => p.key)
     res.json({
       ok: true,
       service: 'cinemagraphy-next',
       version: VERSION,
-      providers: enabled,
+      providers: listEnabledProviders(config).map((p) => p.key),
       time: new Date().toISOString(),
     })
   })
@@ -104,8 +100,6 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
       (req.url.includes('/search=') ? req.url.split('/').pop() : '')
     const extra = parseExtra(extraRaw)
     const search = extra.search ? String(extra.search) : ''
-
-    log.info('catalog request', { type, id, search })
 
     const m = id.match(/^([a-z0-9]+)_(movies|series)$/i)
     if (!m || !search) {
@@ -204,20 +198,13 @@ a{color:#6ea8ff}code{background:#1a1f2b;padding:.15rem .4rem;border-radius:4px}
     }
     const streams = await provider.getStreams(detail, null, { config })
     res.json({
-      streams: (streams || []).map((s) => {
-        const q = s.quality || ''
-        const name =
-          /2160|4K/i.test(q) ? '🎬 4K' :
-          /1080/i.test(q) ? '🎬 1080p' :
-          /720/i.test(q) ? '🎬 720p' :
-          /480/i.test(q) ? '🎬 480p' :
-          q ? `🎬 ${q}` : '🎬 F2'
-        return {
-          name,
-          title: s.title,
-          url: s.url,
-        }
-      }),
+      streams: (streams || []).map((s) => ({
+        // Big badge — quality only (no emoji, no duplicate)
+        name: s.name || s.quality || 'HD',
+        // Multi-line details
+        title: s.title,
+        url: s.url,
+      })),
     })
   })
 

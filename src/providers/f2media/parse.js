@@ -1,6 +1,5 @@
 /**
- * F2Media parsers — based on real public page structure (download-list, schema.org).
- * Streams: CDN mkv/mp4 URLs encode quality + DUB/SUB; list blocks have quality/encoder text.
+ * F2Media parsers — real page structure (download-list, schema only as last resort).
  */
 
 export function parseSearchHtml(html, baseUrl) {
@@ -46,29 +45,15 @@ export function parseSearchHtml(html, baseUrl) {
   return results
 }
 
-/**
- * Parse stream rows from F2Media detail pages.
- * Prefer structured download-list blocks; fall back to CDN media links.
- */
 export function parseDetailStreams(html, baseUrl) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const out = []
   const seen = new Set()
 
-  // Blocks: <div class="download-list dubbled|hardsub"> ... کیفیت ... دانلود مستقیم
-  const blockRe =
-    /<div[^>]+class=["'][^"']*download-list[^"']*["'][^>]*>([\s\S]*?)(?=<div[^>]+class=["'][^"']*download-list|$)\/div>/gi
-  let bm
+  const parts = html.split(/class=["'][^"']*download-list/i)
   const blocks = []
-  while ((bm = blockRe.exec(html)) !== null) {
-    blocks.push(bm[0])
-  }
-  // Simpler split if regex fails on nested divs
-  if (blocks.length === 0) {
-    const parts = html.split(/class=["'][^"']*download-list/i)
-    for (let i = 1; i < parts.length; i++) {
-      blocks.push('class="download-list' + parts[i].slice(0, 3500))
-    }
+  for (let i = 1; i < parts.length; i++) {
+    blocks.push('class="download-list' + parts[i].slice(0, 4000))
   }
 
   for (const block of blocks) {
@@ -85,7 +70,6 @@ export function parseDetailStreams(html, baseUrl) {
       const abs = resolveUrl(base, href)
       if (!abs || !isPlayableOrDownloadUrl(abs)) continue
       if (seen.has(abs)) continue
-      // skip pure audio tracks if we only want video — keep but mark
       const isAudioOnly = /\.(mka|aac|mp3)(\?|$)/i.test(abs)
       seen.add(abs)
 
@@ -93,18 +77,16 @@ export function parseDetailStreams(html, baseUrl) {
       const fromBlock = analyzeBlockText(block)
       const quality = fromUrl.quality || fromBlock.quality
       const size = fromBlock.size || fromUrl.size
-      const audio =
-        fromUrl.audio || sectionAudio || fromBlock.audio || null
+      const audio = fromUrl.audio || sectionAudio || fromBlock.audio || null
       const source = fromUrl.source || fromBlock.source
       const codec = fromUrl.codec || fromBlock.codec
       const hdr = fromUrl.hdr || fromBlock.hdr
       const bit10 = fromUrl.bit10 || fromBlock.bit10
       const encoder = fromBlock.encoder
 
-      out.push({
-        url: abs,
-        quality: quality || undefined,
-        size: size || undefined,
+      const info = {
+        quality,
+        size,
         audio,
         source,
         codec,
@@ -112,22 +94,18 @@ export function parseDetailStreams(html, baseUrl) {
         bit10: Boolean(bit10),
         encoder,
         isAudioOnly,
-        label: formatStreamLabel({
-          quality,
-          size,
-          audio,
-          source,
-          codec,
-          hdr,
-          bit10,
-          encoder,
-          isAudioOnly,
-        }),
+        providerName: 'F2Media',
+      }
+
+      out.push({
+        url: abs,
+        ...info,
+        label: formatStreamLabel(info),
+        badge: qualityBadge(quality),
       })
     }
   }
 
-  // Fallback: any CDN media link not already captured
   if (out.length === 0) {
     const aRe = /<a[^>]+href=["']([^"']+)["'][^>]*>/gi
     let am
@@ -136,23 +114,23 @@ export function parseDetailStreams(html, baseUrl) {
       if (!abs || !isPlayableOrDownloadUrl(abs) || seen.has(abs)) continue
       seen.add(abs)
       const fromUrl = analyzeMediaUrl(abs)
+      const info = {
+        ...fromUrl,
+        isAudioOnly: /\.(mka|aac|mp3)(\?|$)/i.test(abs),
+        providerName: 'F2Media',
+      }
       out.push({
         url: abs,
-        quality: fromUrl.quality,
-        audio: fromUrl.audio,
-        source: fromUrl.source,
-        codec: fromUrl.codec,
-        hdr: fromUrl.hdr,
-        bit10: fromUrl.bit10,
-        isAudioOnly: /\.(mka|aac|mp3)(\?|$)/i.test(abs),
-        label: formatStreamLabel(fromUrl),
+        ...info,
+        label: formatStreamLabel(info),
+        badge: qualityBadge(fromUrl.quality),
       })
     }
   }
 
   const rank = (s) => {
     const q = parseInt(String(s.quality || '').replace(/\D/g, ''), 10) || 0
-    return q + (s.hdr ? 50 : 0)
+    return q + (s.hdr ? 50 : 0) + (s.audio === 'dub' ? 5 : 0)
   }
   out.sort((a, b) => rank(b) - rank(a))
   return out.filter((s) => !s.isAudioOnly)
@@ -169,20 +147,17 @@ export function parseDetailMeta(html, baseUrl) {
   const imdb = match1(html, /imdb\.com\/title\/(tt\d+)/i)
   const type = inferType(html.slice(0, 12000) + ' ' + (clean || ''))
 
-  // Prefer schema.org / thumbnailUrl (og:image is often broken on this site)
+  // Site posters often blocked/broken — keep only as last-resort candidate
   let poster =
     match1(html, /"thumbnailUrl"\s*:\s*"(https?:[^"\\]+)"/i) ||
-    match1(html, /"contentUrl"\s*:\s*"(https?:[^"\\]+\.(?:jpg|jpeg|png|webp)[^"\\]*)"/i) ||
-    match1(html, /property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
+    match1(html, /"contentUrl"\s*:\s*"(https?:[^"\\]+\.(?:jpg|jpeg|png|webp)[^"\\]*)"/i)
   if (poster) {
     poster = resolveUrl(base, poster) || poster
-    // Discard clearly broken local-path og images
-    if (/public_html|www\.film2med\.top\/jpeg/i.test(poster)) poster = undefined
+    if (/public_html|film2med\.top\/jpeg/i.test(poster)) poster = undefined
   }
 
   let description =
-    match1(html, /"description"\s*:\s*"((?:\\.|[^"\\])+)"/i) ||
-    match1(html, /property=["']og:description["'][^>]*content=["']([^"']+)["']/i)
+    match1(html, /"description"\s*:\s*"((?:\\.|[^"\\])+)"/i)
   if (description) {
     description = stripTags(decodeHtml(description)).slice(0, 1500)
     if (isSpamDescription(description)) description = undefined
@@ -215,31 +190,58 @@ export function decodePageId(itemId) {
   }
 }
 
+/** Short badge for stream.name — no emoji, no repeat */
+export function qualityBadge(quality) {
+  const q = String(quality || '')
+  if (/2160|4K/i.test(q)) return '4K'
+  if (/1080/i.test(q)) return '1080p'
+  if (/720/i.test(q)) return '720p'
+  if (/480/i.test(q)) return '480p'
+  if (/360/i.test(q)) return '360p'
+  return q || 'HD'
+}
+
+/**
+ * Multi-line professional stream card for Stremio/Nuvio title field.
+ *
+ * 🟣 F2Media
+ * 2160p · HDR · 10bit · BluRay · x265
+ * 📝 زیرنویس چسبیده
+ * 📦 12.4 GB · PSA
+ */
 export function formatStreamLabel(info = {}) {
-  const parts = []
-  const q = info.quality ? String(info.quality).toUpperCase() : null
-  if (q) {
-    if (/2160|4K/i.test(q)) parts.push('🎬 4K')
-    else if (/1080/i.test(q)) parts.push('🎬 1080p')
-    else if (/720/i.test(q)) parts.push('🎬 720p')
-    else if (/480/i.test(q)) parts.push('🎬 480p')
-    else parts.push(`🎬 ${q}`)
-  } else {
-    parts.push('🎬')
+  const lines = []
+
+  // Line 1 — source (emoji = provider identity)
+  const provider = info.providerName || 'F2Media'
+  lines.push(`🟣 ${provider}`)
+
+  // Line 2 — technical quality stack (no leading 4K badge — that's stream.name)
+  const tech = []
+  if (info.quality) {
+    const q = String(info.quality)
+    if (/2160|4K/i.test(q)) tech.push('2160p')
+    else tech.push(q)
   }
-  if (info.hdr) parts.push('HDR')
-  if (info.bit10) parts.push('10bit')
-  if (info.codec) parts.push(info.codec)
-  if (info.source) parts.push(info.source)
+  if (info.hdr) tech.push('HDR')
+  if (info.bit10) tech.push('10bit')
+  if (info.source) tech.push(info.source)
+  if (info.codec) tech.push(info.codec)
+  if (tech.length) lines.push(tech.join(' · '))
 
-  if (info.audio === 'dub') parts.push('🎧 دوبله فارسی')
-  else if (info.audio === 'sub') parts.push('📝 زیرنویس چسبیده')
+  // Line 3 — audio / subtitles
+  if (info.audio === 'dub') lines.push('🎧 دوبله فارسی')
+  else if (info.audio === 'sub') lines.push('📝 زیرنویس چسبیده')
+  else if (info.audio) lines.push(String(info.audio))
 
-  if (info.size) parts.push(`📦 ${info.size}`)
-  if (info.encoder && info.encoder !== 'unknown') parts.push(info.encoder)
-  if (info.isAudioOnly) parts.push('🔊 فقط صدا')
+  // Line 4 — size then encoder
+  const tail = []
+  if (info.size) tail.push(`📦 ${info.size}`)
+  if (info.encoder && !/^unknown$/i.test(info.encoder)) tail.push(info.encoder)
+  if (info.isAudioOnly) tail.push('🔊 فقط صدا')
+  if (tail.length) lines.push(tail.join(' · '))
 
-  return parts.join(' · ')
+  return lines.join('\n')
 }
 
 function analyzeMediaUrl(url) {
@@ -249,7 +251,15 @@ function analyzeMediaUrl(url) {
   if (/\/DUB\/|Farsi\.Dubbed|\bDubbed\b|دوبله/i.test(u)) audio = 'dub'
   else if (/\/SUB\/|Farsi\.Sub|HardSub|hardsub|زیرنویس/i.test(u)) audio = 'sub'
 
-  const source = /BluRay/i.test(u) ? 'BluRay' : /WEB-?DL|WEBRip/i.test(u) ? 'WEB' : /HDTV/i.test(u) ? 'HDTV' : null
+  const source = /BluRay/i.test(u)
+    ? 'BluRay'
+    : /WEB-?DL/i.test(u)
+      ? 'WEB-DL'
+      : /WEBRip/i.test(u)
+        ? 'WEBRip'
+        : /HDTV/i.test(u)
+          ? 'HDTV'
+          : null
   const codec = /x265|HEVC/i.test(u) ? 'x265' : /x264|AVC/i.test(u) ? 'x264' : null
   const hdr = /\bHDR\b/i.test(u)
   const bit10 = /10bit|10-bit/i.test(u)
@@ -258,14 +268,18 @@ function analyzeMediaUrl(url) {
 
 function analyzeBlockText(block) {
   const text = stripTags(block)
-  const quality =
-    extractQuality(text) ||
-    (/4\s*K|2160/i.test(text) ? '2160p' : null)
+  const quality = extractQuality(text) || (/4\s*K|2160/i.test(text) ? '2160p' : null)
   const size = extractSize(text)
   let audio = null
   if (/دوبله/i.test(text)) audio = 'dub'
   else if (/زیرنویس/i.test(text)) audio = 'sub'
-  const source = /BluRay/i.test(text) ? 'BluRay' : /WEB/i.test(text) ? 'WEB' : null
+  const source = /BluRay/i.test(text)
+    ? 'BluRay'
+    : /WEB-?DL/i.test(text)
+      ? 'WEB-DL'
+      : /WEBRip/i.test(text)
+        ? 'WEBRip'
+        : null
   const codec = /x265|HEVC/i.test(text) ? 'x265' : /x264/i.test(text) ? 'x264' : null
   const hdr = /\bHDR\b/i.test(text)
   const bit10 = /10\s*bit/i.test(text)
@@ -275,7 +289,6 @@ function analyzeBlockText(block) {
 
 function isSpamDescription(d) {
   const t = String(d || '')
-  // Site-wide SEO keyword salad
   if (/دانلود فیلم بدون سانسور.*دانلود رایگان فیلم/i.test(t)) return true
   if ((t.match(/دانلود/g) || []).length >= 4) return true
   if (t.length < 40) return true
@@ -327,13 +340,12 @@ function isPlayableOrDownloadUrl(abs) {
     const u = new URL(abs)
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
     const s = abs.toLowerCase()
+    if (/[?&]playit=/i.test(s)) return false
     if (/\.(mp4|mkv|m3u8|avi|mov|mka)(\?|$)/i.test(s)) return true
     if (/\/(download|dl|file|stream|video)\b/i.test(s)) return true
     if (/\b(cdn|dl|media|files|abrtech)\b/i.test(u.hostname) && u.pathname.length > 8) {
       return true
     }
-    // playit query = online player page, not direct file — skip for stream list
-    if (/[?&]playit=/i.test(s)) return false
     return false
   } catch {
     return false
@@ -370,8 +382,7 @@ function extractTitle(innerHtml) {
 function extractTitleNearHref(html, href) {
   const idx = html.indexOf(href)
   if (idx < 0) return ''
-  const slice = html.slice(Math.max(0, idx - 200), idx + 400)
-  return extractTitle(slice)
+  return extractTitle(html.slice(Math.max(0, idx - 200), idx + 400))
 }
 
 function extractImg(innerHtml) {
@@ -391,7 +402,7 @@ function extractQuality(text) {
   const t = String(text)
   if (/\b2160p\b|\b4K\b/i.test(t)) return '2160p'
   const m = t.match(/\b(1080p|720p|480p|360p)\b/i)
-  return m ? m[1].toUpperCase().replace('P', 'p') : null
+  return m ? m[1] : null
 }
 
 function extractSize(text) {
@@ -450,8 +461,6 @@ function decodeHtml(s) {
     .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
 }
 
 function match1(s, re) {
