@@ -1,32 +1,36 @@
 /**
- * In-memory CacheStore with TTL.
+ * Simple in-memory TTL cache (no external deps).
  */
 
-export function createMemoryCache() {
-  const map = new Map()
+export function createMemoryCache(defaultTtlMs = 10 * 60_000) {
+  const store = new Map()
 
-  function purge(key) {
-    const e = map.get(key)
-    if (!e) return
-    if (Date.now() > e.expires) map.delete(key)
+  function get(key) {
+    const e = store.get(key)
+    if (!e) return undefined
+    if (Date.now() > e.exp) {
+      store.delete(key)
+      return undefined
+    }
+    return e.value
   }
 
-  return {
-    get(key) {
-      purge(key)
-      return map.get(key)?.value
-    },
-    set(key, value, ttlMs = 60_000) {
-      map.set(key, { value, expires: Date.now() + Math.max(0, ttlMs) })
-    },
-    delete(key) {
-      map.delete(key)
-    },
-    clear() {
-      map.clear()
-    },
-    size() {
-      return map.size
-    },
+  function set(key, value, ttlMs = defaultTtlMs) {
+    store.set(key, { value, exp: Date.now() + ttlMs })
+    return value
   }
+
+  async function wrap(key, fn, ttlMs = defaultTtlMs) {
+    const hit = get(key)
+    if (hit !== undefined) return hit
+    const value = await fn()
+    if (value !== undefined && value !== null) set(key, value, ttlMs)
+    return value
+  }
+
+  function clear() {
+    store.clear()
+  }
+
+  return { get, set, wrap, clear, size: () => store.size }
 }

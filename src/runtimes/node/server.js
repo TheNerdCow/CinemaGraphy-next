@@ -17,7 +17,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.2.1'
+const VERSION = process.env.ADDON_VERSION || '0.2.2'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -59,20 +59,19 @@ function createApp() {
       capabilities: p.capabilities,
     }))
     const manifest = buildStremioManifest(config, providers)
-    // Prefer FA short catalog names without client-looking suffixes in our own data
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
-    res.setHeader('Cache-Control', 'public, max-age=30')
+    res.setHeader('Cache-Control', 'public, max-age=60')
     res.json(manifest)
   }
 
   app.get('/', (_req, res) => {
     res.type('html').send(`<!doctype html>
-<html lang="fa" dir="rtl"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<html lang="fa" dir="rtl"><head><meta charset="utf-8"/>
 <title>CinemaGraphy Next</title>
-<style>body{font-family:system-ui,sans-serif;background:#0b0d12;color:#e8eaef;margin:0;padding:2rem;line-height:1.6}
-a{color:#6ea8ff}.card{max-width:42rem;margin:auto;background:#12161f;border:1px solid #243044;border-radius:12px;padding:1.5rem}</style></head>
+<style>body{font-family:system-ui;background:#0b0d12;color:#e8eaef;padding:2rem}
+a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radius:12px;padding:1.5rem;border:1px solid #243044}</style></head>
 <body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
-<p>سریال با قسمت‌بندی + کاتالوگ browse.</p>
+<p>کش کاتالوگ + متای سخت‌گیرانه.</p>
 <ul><li><a href="/manifest.json">manifest</a></li><li><a href="/health">health</a></li></ul></div></body></html>`)
   })
 
@@ -221,6 +220,7 @@ a{color:#6ea8ff}.card{max-width:42rem;margin:auto;background:#12161f;border:1px 
       }))
     }
 
+    res.setHeader('Cache-Control', 'public, max-age=120')
     res.json({ meta })
   })
 

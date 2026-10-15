@@ -32,23 +32,26 @@ export function buildStremioManifest(config, providers = []) {
   }
 
   const catalogs = []
+  const lang = config.ui?.lang || 'fa'
 
   if (config.resources.catalog) {
     for (const p of providers) {
-      if (!p.capabilities?.search) continue
-      catalogs.push({
-        id: `${p.key}_movies`,
-        type: 'movie',
-        name: p.name || p.key,
-        extra: [{ name: 'search', isRequired: true }],
-      })
-      catalogs.push({
-        id: `${p.key}_series`,
-        type: 'series',
-        name: p.name || p.key,
-        extra: [{ name: 'search', isRequired: true }],
-      })
-      for (const c of p.capabilities.browseCatalogs || []) {
+      // Search catalogs — FA names, no English Movies/Series in our string
+      if (p.capabilities?.search) {
+        catalogs.push({
+          id: `${p.key}_movies`,
+          type: 'movie',
+          name: lang === 'en' ? `${p.name} Search` : `جستجو ${p.name} (فیلم)`,
+          extra: [{ name: 'search', isRequired: true }],
+        })
+        catalogs.push({
+          id: `${p.key}_series`,
+          type: 'series',
+          name: lang === 'en' ? `${p.name} Search` : `جستجو ${p.name} (سریال)`,
+          extra: [{ name: 'search', isRequired: true }],
+        })
+      }
+      for (const c of p.capabilities?.browseCatalogs || []) {
         catalogs.push(c)
       }
     }
@@ -56,8 +59,8 @@ export function buildStremioManifest(config, providers = []) {
 
   const description =
     config.mode === 'streams'
-      ? 'CinemaGraphy Next — streams only (sources). Use another addon for catalogs if needed.'
-      : config.ui.lang === 'fa'
+      ? 'CinemaGraphy Next — streams only (sources).'
+      : lang === 'fa'
         ? 'سینماگرافی (نسخهٔ مستقل ماژولار) — فیلم و سریال از منابع ایرانی'
         : 'CinemaGraphy Next — modular independent rewrite'
 
