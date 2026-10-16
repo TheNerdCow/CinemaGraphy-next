@@ -1,6 +1,15 @@
 /**
- * F2Media parsers — real page structure (download-list).
+ * F2Media parsers — real page structure (download-list + full media link scan).
  */
+
+import {
+  qualityBadge,
+  formatStreamLabel,
+  analyzeMediaUrl,
+  extractQuality,
+} from './parse-streams-shared.js'
+
+export { qualityBadge, formatStreamLabel }
 
 export function parseSearchHtml(html, baseUrl) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
@@ -45,90 +54,31 @@ export function parseSearchHtml(html, baseUrl) {
   return results
 }
 
+/**
+ * Collect ALL playable download links on a detail page.
+ * Previous bug: download-list blocks were truncated to 4000 chars → missed 720p/480p.
+ */
 export function parseDetailStreams(html, baseUrl) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const out = []
   const seen = new Set()
 
-  const parts = html.split(/class=["'][^"']*download-list/i)
-  const blocks = []
-  for (let i = 1; i < parts.length; i++) {
-    blocks.push('class="download-list' + parts[i].slice(0, 4000))
-  }
-
-  for (const block of blocks) {
-    const sectionAudio = /download-list\s+dubbled|دوبله/i.test(block)
+  // 1) Prefer structured download-list sections (full section, no char cap)
+  const sectionRe = /class=["']([^"']*download-list[^"']*)["'][^>]*>([\s\S]*?)(?=<div[^>]+class=["'][^"']*download-list|class=["'][^"']*download-list|$)/gi
+  let sm
+  while ((sm = sectionRe.exec(html)) !== null) {
+    const className = sm[1] || ''
+    const block = sm[0]
+    const sectionAudio = /dubbled|4dub|\bdub\b|دوبله/i.test(className + block.slice(0, 200))
       ? 'dub'
-      : /download-list\s+hardsub|زیرنویس/i.test(block)
+      : /hardsub|rsub|\bsub\b|زیرنویس/i.test(className + block.slice(0, 200))
         ? 'sub'
         : null
-
-    const aRe = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
-    let am
-    while ((am = aRe.exec(block)) !== null) {
-      const href = decodeHtml(am[1])
-      const abs = resolveUrl(base, href)
-      if (!abs || !isPlayableOrDownloadUrl(abs)) continue
-      if (seen.has(abs)) continue
-      const isAudioOnly = /\.(mka|aac|mp3)(\?|$)/i.test(abs)
-      seen.add(abs)
-
-      const fromUrl = analyzeMediaUrl(abs)
-      const fromBlock = analyzeBlockText(block)
-      const quality = fromUrl.quality || fromBlock.quality
-      const size = fromBlock.size || fromUrl.size
-      const audio = fromUrl.audio || sectionAudio || fromBlock.audio || null
-      const source = fromUrl.source || fromBlock.source
-      const codec = fromUrl.codec || fromBlock.codec
-      const hdr = fromUrl.hdr || fromBlock.hdr
-      const bit10 = fromUrl.bit10 || fromBlock.bit10
-      const encoder = fromBlock.encoder
-
-      const info = {
-        quality,
-        size,
-        audio,
-        source,
-        codec,
-        hdr: Boolean(hdr),
-        bit10: Boolean(bit10),
-        encoder,
-        isAudioOnly,
-        providerName: 'F2Media',
-        providerEmoji: '🎬',
-      }
-
-      out.push({
-        url: abs,
-        ...info,
-        label: formatStreamLabel(info),
-        badge: qualityBadge(quality),
-      })
-    }
+    collectLinksFromHtml(block, base, out, seen, sectionAudio)
   }
 
-  if (out.length === 0) {
-    const aRe = /<a[^>]+href=["']([^"']+)["'][^>]*>/gi
-    let am
-    while ((am = aRe.exec(html)) !== null) {
-      const abs = resolveUrl(base, decodeHtml(am[1]))
-      if (!abs || !isPlayableOrDownloadUrl(abs) || seen.has(abs)) continue
-      seen.add(abs)
-      const fromUrl = analyzeMediaUrl(abs)
-      const info = {
-        ...fromUrl,
-        isAudioOnly: /\.(mka|aac|mp3)(\?|$)/i.test(abs),
-        providerName: 'F2Media',
-        providerEmoji: '🎬',
-      }
-      out.push({
-        url: abs,
-        ...info,
-        label: formatStreamLabel(info),
-        badge: qualityBadge(fromUrl.quality),
-      })
-    }
-  }
+  // 2) Always full-page pass — catches links outside truncated/old markup
+  collectLinksFromHtml(html, base, out, seen, null)
 
   const rank = (s) => {
     const q = parseInt(String(s.quality || '').replace(/\D/g, ''), 10) || 0
@@ -136,6 +86,70 @@ export function parseDetailStreams(html, baseUrl) {
   }
   out.sort((a, b) => rank(b) - rank(a))
   return out.filter((s) => !s.isAudioOnly)
+}
+
+function collectLinksFromHtml(html, base, out, seen, sectionAudio) {
+  const aRe = /<a[^>]+href=["']([^"']+)["'][^>]*(?:>([\s\S]*?)<\/a>|(?:\s*\/>))/gi
+  let am
+  while ((am = aRe.exec(html)) !== null) {
+    const href = decodeHtml(am[1])
+    const abs = resolveUrl(base, href)
+    if (!abs || !isPlayableOrDownloadUrl(abs)) continue
+    if (seen.has(abs)) continue
+
+    const isAudioOnly = /\.(mka|aac|mp3)(\?|$)/i.test(abs)
+    seen.add(abs)
+
+    // Local context around this link for quality/size (not the whole page)
+    const start = Math.max(0, am.index - 400)
+    const local = html.slice(start, am.index + (am[0]?.length || 0) + 80)
+    const localText = stripTags(local) + ' ' + stripTags(am[2] || '')
+
+    const fromUrl = analyzeMediaUrl(abs)
+    const quality = fromUrl.quality || extractQuality(localText)
+    const size = extractSize(localText)
+    const audio =
+      fromUrl.audio ||
+      sectionAudio ||
+      (/دوبله/i.test(localText) ? 'dub' : /زیرنویس/i.test(localText) ? 'sub' : null)
+    const source =
+      fromUrl.source ||
+      (/BluRay/i.test(localText)
+        ? 'BluRay'
+        : /WEB-?DL/i.test(localText)
+          ? 'WEB-DL'
+          : /WEBRip/i.test(localText)
+            ? 'WEBRip'
+            : null)
+    const codec =
+      fromUrl.codec || (/x265|HEVC/i.test(localText) ? 'x265' : /x264/i.test(localText) ? 'x264' : null)
+    const hdr = fromUrl.hdr || /\bHDR\b/i.test(localText)
+    const bit10 = fromUrl.bit10 || /10\s*bit/i.test(localText)
+    const encoder =
+      fromUrl.encoder ||
+      match1(localText, /انکودر\s*:?\s*([A-Za-z0-9._\-]+)/i)
+
+    const info = {
+      quality,
+      size,
+      audio,
+      source,
+      codec,
+      hdr: Boolean(hdr),
+      bit10: Boolean(bit10),
+      encoder: encoder && !/^unknown$/i.test(encoder) ? encoder : undefined,
+      isAudioOnly,
+      providerName: 'F2Media',
+      providerEmoji: '🎬',
+    }
+
+    out.push({
+      url: abs,
+      ...info,
+      label: formatStreamLabel(info),
+      badge: qualityBadge(quality),
+    })
+  }
 }
 
 export function parseDetailMeta(html, baseUrl) {
@@ -154,7 +168,7 @@ export function parseDetailMeta(html, baseUrl) {
     match1(html, /"contentUrl"\s*:\s*"(https?:[^"\\]+\.(?:jpg|jpeg|png|webp)[^"\\]*)"/i)
   if (poster) {
     poster = resolveUrl(base, poster) || poster
-    if (/public_html|film2med\.top\/jpeg/i.test(poster)) poster = undefined
+    if (/public_html|film2med\.top\/jpeg|myf2ms\.top\/jpeg/i.test(poster)) poster = undefined
   }
 
   let description = match1(html, /"description"\s*:\s*"((?:\\.|[^"\\])+)"/i)
@@ -188,115 +202,6 @@ export function decodePageId(itemId) {
   } catch {
     return null
   }
-}
-
-export function qualityBadge(quality) {
-  const q = String(quality || '')
-  if (/2160|4K/i.test(q)) return '4K'
-  if (/1080/i.test(q)) return '1080p'
-  if (/720/i.test(q)) return '720p'
-  if (/480/i.test(q)) return '480p'
-  if (/360/i.test(q)) return '360p'
-  return q || 'HD'
-}
-
-/** Unicode LTR embedding — keeps 2160p / HDR / F2Media from scrambling in RTL UI */
-const LRE = '\u202A'
-const PDF = '\u202C'
-function ltr(text) {
-  return `${LRE}${text}${PDF}`
-}
-
-/**
- * RTL-safe labeled stream card.
- *
- * 🎬 منبع: F2Media
- * 📊 کیفیت: 2160p · HDR · 10bit · BluRay · x265
- * 📝 زیرنویس: زیرنویس چسبیده فارسی
- * 🎧 دوبله: دوبله فارسی
- * 🎞️ انکدر: PSA
- * 📦 سایز: 12.4 GB
- */
-export function formatStreamLabel(info = {}) {
-  const lines = []
-  const emoji = info.providerEmoji || '🎬'
-  const provider = info.providerName || 'F2Media'
-  lines.push(`${emoji} منبع: ${ltr(provider)}`)
-
-  const tech = []
-  if (info.quality) {
-    const q = String(info.quality)
-    if (/2160|4K/i.test(q)) tech.push('2160p')
-    else tech.push(q)
-  }
-  if (info.hdr) tech.push('HDR')
-  if (info.bit10) tech.push('10bit')
-  if (info.source) tech.push(info.source)
-  if (info.codec) tech.push(info.codec)
-  if (tech.length) {
-    lines.push(`📊 کیفیت: ${ltr(tech.join(' · '))}`)
-  }
-
-  if (info.audio === 'sub') {
-    lines.push('📝 زیرنویس: زیرنویس چسبیده فارسی')
-  } else if (info.audio === 'dub') {
-    lines.push('🎧 دوبله: دوبله فارسی')
-  }
-
-  if (info.encoder && !/^unknown$/i.test(info.encoder)) {
-    lines.push(`🎞️ انکدر: ${ltr(info.encoder)}`)
-  }
-
-  if (info.size) {
-    lines.push(`📦 سایز: ${ltr(String(info.size))}`)
-  }
-
-  if (info.isAudioOnly) lines.push('🔊 فقط صدا')
-
-  return lines.join('\n')
-}
-
-function analyzeMediaUrl(url) {
-  const u = String(url)
-  const quality = extractQuality(u)
-  let audio = null
-  if (/\/DUB\/|Farsi\.Dubbed|\bDubbed\b|دوبله/i.test(u)) audio = 'dub'
-  else if (/\/SUB\/|Farsi\.Sub|HardSub|hardsub|زیرنویس/i.test(u)) audio = 'sub'
-
-  const source = /BluRay/i.test(u)
-    ? 'BluRay'
-    : /WEB-?DL/i.test(u)
-      ? 'WEB-DL'
-      : /WEBRip/i.test(u)
-        ? 'WEBRip'
-        : /HDTV/i.test(u)
-          ? 'HDTV'
-          : null
-  const codec = /x265|HEVC/i.test(u) ? 'x265' : /x264|AVC/i.test(u) ? 'x264' : null
-  const hdr = /\bHDR\b/i.test(u)
-  const bit10 = /10bit|10-bit/i.test(u)
-  return { quality, audio, source, codec, hdr, bit10 }
-}
-
-function analyzeBlockText(block) {
-  const text = stripTags(block)
-  const quality = extractQuality(text) || (/4\s*K|2160/i.test(text) ? '2160p' : null)
-  const size = extractSize(text)
-  let audio = null
-  if (/دوبله/i.test(text)) audio = 'dub'
-  else if (/زیرنویس/i.test(text)) audio = 'sub'
-  const source = /BluRay/i.test(text)
-    ? 'BluRay'
-    : /WEB-?DL/i.test(text)
-      ? 'WEB-DL'
-      : /WEBRip/i.test(text)
-        ? 'WEBRip'
-        : null
-  const codec = /x265|HEVC/i.test(text) ? 'x265' : /x264/i.test(text) ? 'x264' : null
-  const hdr = /\bHDR\b/i.test(text)
-  const bit10 = /10\s*bit/i.test(text)
-  const encoder = match1(text, /انکودر\s*:?\s*([A-Za-z0-9._\-]+)/i)
-  return { quality, size, audio, source, codec, hdr, bit10, encoder }
 }
 
 function isSpamDescription(d) {
@@ -355,7 +260,10 @@ function isPlayableOrDownloadUrl(abs) {
     if (/[?&]playit=/i.test(s)) return false
     if (/\.(mp4|mkv|m3u8|avi|mov|mka)(\?|$)/i.test(s)) return true
     if (/\/(download|dl|file|stream|video)\b/i.test(s)) return true
-    if (/\b(cdn|dl|media|files|abrtech)\b/i.test(u.hostname) && u.pathname.length > 8) {
+    if (
+      /\b(cdn|dl|media|files|abrtech)\b/i.test(u.hostname) &&
+      u.pathname.length > 8
+    ) {
       return true
     }
     return false
@@ -410,13 +318,6 @@ function extractYear(text) {
   return m ? Number(m[0]) : null
 }
 
-function extractQuality(text) {
-  const t = String(text)
-  if (/\b2160p\b|\b4K\b/i.test(t)) return '2160p'
-  const m = t.match(/\b(1080p|720p|480p|360p)\b/i)
-  return m ? m[1] : null
-}
-
 function extractSize(text) {
   const m = String(text).match(/\b(\d+(?:\.\d+)?\s*(?:GB|MB|گیگابایت|مگابایت|گیگ|مگ))\b/i)
   if (!m) return null
@@ -461,8 +362,8 @@ function stripTags(s) {
   return String(s)
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
-    .replace(/&/g, '&')
-    .replace(/"/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, ' ')
     .trim()
@@ -470,8 +371,8 @@ function stripTags(s) {
 
 function decodeHtml(s) {
   return String(s)
-    .replace(/&/g, '&')
-    .replace(/"/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
 }
 

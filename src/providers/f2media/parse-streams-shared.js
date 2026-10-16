@@ -50,8 +50,16 @@ export function analyzeMediaUrl(url) {
   const u = String(url)
   const quality = extractQuality(u)
   let audio = null
-  if (/\/DUB\/|Farsi\.Dubbed|\bDubbed\b|دوبله/i.test(u)) audio = 'dub'
-  else if (/\/SUB\/|Farsi\.Sub|HardSub|hardsub|زیرنویس/i.test(u)) audio = 'sub'
+  // Path folders used by F2: 4DUB, RSUB, SUB, DUB, FixNamaDUB, …
+  if (
+    /\/4DUB\/|\/DUB\/|Farsi\.4Dubbed|Farsi\.Dubbed|\bDubbed\b|دوبله/i.test(u)
+  ) {
+    audio = 'dub'
+  } else if (
+    /\/RSUB\/|\/SUB\/|Farsi\.Sub|HardSub|hardsub|زیرنویس/i.test(u)
+  ) {
+    audio = 'sub'
+  }
 
   const source = /BluRay/i.test(u)
     ? 'BluRay'
@@ -63,14 +71,22 @@ export function analyzeMediaUrl(url) {
           ? 'HDTV'
           : null
   const codec = /x265|HEVC/i.test(u) ? 'x265' : /x264|AVC/i.test(u) ? 'x264' : null
-  const hdr = /\bHDR\b/i.test(u)
+  const hdr = /\bHDR10|\bHDR\b|\bDV\b|Dolby.?Vision/i.test(u)
   const bit10 = /10bit|10-bit/i.test(u)
-  return { quality, audio, source, codec, hdr, bit10 }
+  const encoder =
+    match1(u, /\.(PSA|YIFY|KyoGo|ETHEL|RARBG|FLUX|CMRG)(?:\.|$)/i) ||
+    match1(u, /[\/._-](PSA|YIFY|KyoGo|ETHEL)[\/._-]/i)
+  return { quality, audio, source, codec, hdr: Boolean(hdr), bit10: Boolean(bit10), encoder }
 }
 
-function extractQuality(text) {
+export function extractQuality(text) {
   const t = String(text)
   if (/\b2160p\b|\b4K\b/i.test(t)) return '2160p'
   const m = t.match(/\b(1080p|720p|480p|360p)\b/i)
+  return m ? m[1] : null
+}
+
+function match1(s, re) {
+  const m = String(s).match(re)
   return m ? m[1] : null
 }
