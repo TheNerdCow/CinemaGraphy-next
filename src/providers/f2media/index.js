@@ -1,6 +1,6 @@
 /**
- * F2Media provider — stream-first; Cinemeta/metahub for optional posters (no API key).
- * TMDB is not used on the normal runtime path.
+ * F2Media provider — stream-first.
+ * Posters: site HTML first, then Cinemeta/MetaHub only when missing (no API key).
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
@@ -19,6 +19,7 @@ import {
 } from './parse.js'
 import { parseListingHtml, parseHomeRail } from './parse-listing.js'
 import { parseSeriesEpisodes } from './parse-series.js'
+import { extractPosterFromHtml } from './poster.js'
 import {
   getCatalogById,
   toManifestCatalogs,
@@ -40,8 +41,7 @@ export function createF2MediaProvider(deps = {}) {
   const cache = deps.cache || createMemoryCache(CACHE_LIST_MS)
 
   /**
-   * Optional images from Cinemeta only. Never renames title. Never throws.
-   * Missing meta must not affect streams.
+   * Optional Cinemeta images. Never renames title. Never throws.
    */
   async function lookupImages(title, year, type) {
     if (!title) return {}
@@ -54,7 +54,7 @@ export function createF2MediaProvider(deps = {}) {
 
     try {
       const q = year ? `${title} ${year}` : title
-      const found = await withTimeout(cinemeta.search(q, t), 5000)
+      const found = await withTimeout(cinemeta.search(q, t), 4500)
       if (found?.imdb) {
         out.poster = metahubPoster(found.imdb) || found.poster
         out.background = metahubBackground(found.imdb) || found.background || out.poster
@@ -71,16 +71,17 @@ export function createF2MediaProvider(deps = {}) {
     return out
   }
 
-  async function enrichList(items, limit = 16) {
-    const n = Math.min(items.length, limit)
+  /** Only fill items that still lack a poster (site poster wins). */
+  async function enrichListMissingPosters(items, limit = 16) {
+    const need = items.filter((it) => !it.poster).slice(0, limit)
     await Promise.all(
-      items.slice(0, n).map(async (it) => {
+      need.map(async (it) => {
         try {
           const img = await lookupImages(it.title, it.year, it.type)
           if (img.poster) it.poster = img.poster
           if (img.imdb) it.imdb = img.imdb
         } catch {
-          /* keep item without poster */
+          /* keep without poster */
         }
       }),
     )
@@ -139,12 +140,12 @@ export function createF2MediaProvider(deps = {}) {
         }
 
         const items = mapItems(parsed)
-        // Best-effort posters; list is valid even if enrich fails
-        await enrichList(items, 14)
+        await enrichListMissingPosters(items, 14)
         cache.set(cacheKey, items, CACHE_LIST_MS)
         logger.info?.('f2media search', {
           q,
           count: items.length,
+          sitePoster: items.filter((i) => i.poster && !String(i.poster).includes('metahub')).length,
           posters: items.filter((i) => i.poster).length,
         })
         return items
@@ -180,12 +181,13 @@ export function createF2MediaProvider(deps = {}) {
         )
 
         const items = mapItems(parsed.slice(0, 24))
-        await enrichList(items, 18)
+        await enrichListMissingPosters(items, 18)
         cache.set(cacheKey, items, CACHE_LIST_MS)
         logger.info?.('f2media browse', {
           catalogId,
           page,
           count: items.length,
+          sitePoster: items.filter((i) => i.poster && !String(i.poster).includes('metahub')).length,
           posters: items.filter((i) => i.poster).length,
         })
         return items
@@ -216,13 +218,14 @@ export function createF2MediaProvider(deps = {}) {
         }
         const html = await res.text()
         const meta = parseDetailMeta(html, base)
+        const sitePoster =
+          extractPosterFromHtml(html, base) || meta.poster || undefined
 
         const isSeries =
           type === 'series' ||
           /\/series\//i.test(pagePath) ||
           (meta.type === 'series' && /\/series\//i.test(pagePath))
 
-        // Streams first — independent of Cinemeta
         let streams = []
         let episodes = []
         let videos = []
@@ -239,20 +242,39 @@ export function createF2MediaProvider(deps = {}) {
           streams = parseDetailStreams(html, base)
         }
 
-        // Optional enrich; failure leaves streams intact
         let img = {}
         try {
-          img = await lookupImages(meta.title, meta.year, isSeries ? 'series' : 'movie')
+          // Prefer MetaHub when page already has IMDb; else Cinemeta search
+          if (meta.imdb) {
+            img = {
+              imdb: meta.imdb,
+              poster: metahubPoster(meta.imdb),
+              background: metahubBackground(meta.imdb),
+            }
+            const full = await withTimeout(
+              cinemeta.byImdb(meta.imdb, isSeries ? 'series' : 'movie'),
+              4000,
+            )
+            if (full) {
+              img.description = full.description
+              img.genres = full.genres
+              img.imdbRating = full.imdbRating
+              if (!img.poster) img.poster = full.poster
+              if (!img.background) img.background = full.background
+            }
+          } else {
+            img = await lookupImages(meta.title, meta.year, isSeries ? 'series' : 'movie')
+          }
         } catch {
           img = {}
         }
 
-        // Prefer site IMDb when present for stable metahub URLs
         const imdb = meta.imdb || img.imdb
+        // Priority: MetaHub(imdb) → Cinemeta → site poster
         const poster =
-          (imdb && metahubPoster(imdb)) || img.poster || undefined
+          (imdb && metahubPoster(imdb)) || img.poster || sitePoster || undefined
         const background =
-          (imdb && metahubBackground(imdb)) || img.background || poster
+          (imdb && metahubBackground(imdb)) || img.background || poster || sitePoster
 
         const detail = {
           id: itemId,
@@ -283,6 +305,7 @@ export function createF2MediaProvider(deps = {}) {
           streams: streams.length,
           videos: videos.length,
           poster: Boolean(detail.poster),
+          sitePoster: Boolean(sitePoster),
         })
         return detail
       } catch (err) {
@@ -331,13 +354,14 @@ function toStream(s) {
   }
 }
 
+/** Keep site poster from parsers; do not wipe it. */
 function mapItems(parsed) {
   return (parsed || []).map((item) => ({
     internalId: makeInternalId('f2media', item.itemId),
     type: item.type,
     title: item.title,
     year: item.year,
-    poster: undefined,
+    poster: item.poster || undefined,
     providerKey: 'f2media',
     externalRefs: { pagePath: item.pagePath },
   }))
