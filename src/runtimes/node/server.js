@@ -20,7 +20,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.3.2'
+const VERSION = process.env.ADDON_VERSION || '0.3.3'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -159,7 +159,7 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
       try {
         let items = []
         if (search && provider.search) {
-          items = await provider.search(search, { config, timeoutMs: 18_000 })
+          items = await provider.search(search, { config, skip, timeoutMs: 18_000 })
         } else if (genre && provider.browseGenre) {
           items = await provider.browseGenre(wantType, genre, {
             config,
@@ -181,15 +181,21 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
       return
     }
 
-    if ((id.startsWith('f2media_') || id.startsWith('cinamatic_')) && !search) {
+    if (id.startsWith('f2media_') || id.startsWith('cinamatic_')) {
       const providerKey = id.startsWith('cinamatic_') ? 'cinamatic' : 'f2media'
       const provider = getProvider(providerKey)
-      if (!provider?.browse || !provider.isEnabled(config) || config.mode === 'streams') {
+      if (!provider || !provider.isEnabled(config) || config.mode === 'streams') {
         res.json({ metas: [] })
         return
       }
       try {
-        const items = await provider.browse(id, { config, skip, timeoutMs: 18_000 })
+        let items = []
+        // Search on cinamatic film/series/anime catalogs
+        if (search && provider.search) {
+          items = await provider.search(search, { config, skip, timeoutMs: 18_000 })
+        } else if (provider.browse) {
+          items = await provider.browse(id, { config, skip, timeoutMs: 18_000 })
+        }
         res.json({ metas: toMetas(items, providerKey, type) })
       } catch (err) {
         log.warn('catalog browse error', { message: err.message })
