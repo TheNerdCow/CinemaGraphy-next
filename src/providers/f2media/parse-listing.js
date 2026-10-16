@@ -1,10 +1,12 @@
 /**
  * Parse F2Media listing pages (homepage rails, /movies/, /series/, /category/…).
- * Multiple strategies — site markup varies between domains/mirrors.
+ * Accepts myf2ms / film2med mirror hosts (path is what matters).
  */
 
 import { encodePageId } from './parse.js'
 import { extractPosterNearCard } from './poster.js'
+
+const F2_HOST_RE = /(?:^|\.)(myf2ms|film2med|f2media|film2media)\./i
 
 export function parseListingHtml(html, baseUrl) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
@@ -12,7 +14,8 @@ export function parseListingHtml(html, baseUrl) {
   const seen = new Set()
 
   function pushItem({ abs, title, poster, year, type }) {
-    if (!abs || !isContentUrl(abs, base)) return
+    if (!abs) return
+    if (!isContentUrl(abs, base)) return
     const pagePath = pathFromUrl(abs, base)
     if (!pagePath || seen.has(pagePath)) return
     const t = cleanTitle(title || '')
@@ -28,7 +31,7 @@ export function parseListingHtml(html, baseUrl) {
     })
   }
 
-  // Strategy A — classic card (stretched-link + entry-title)
+  // Strategy A — classic card
   const cardRe =
     /<a[^>]+href=["']([^"']+)["'][^>]*class=["'][^"']*stretched-link[^"']*["'][^>]*>[\s\S]*?<h2[^>]*class=["'][^"']*entry-title[^"']*["'][^>]*>([\s\S]*?)<\/h2>/gi
   let m
@@ -46,10 +49,10 @@ export function parseListingHtml(html, baseUrl) {
     if (results.length >= 60) break
   }
 
-  // Strategy B — any content URL + nearby h2/h3 title
+  // Strategy B — link then h2/h3
   if (results.length < 8) {
     const linkTitleRe =
-      /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>[\s\S]{0,400}?<h([23])[^>]*>([\s\S]*?)<\/h\2>/gi
+      /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>[\s\S]{0,500}?<h([23])[^>]*>([\s\S]*?)<\/h\2>/gi
     while ((m = linkTitleRe.exec(html)) !== null) {
       const abs = resolveUrl(base, m[1])
       pushItem({
@@ -61,30 +64,32 @@ export function parseListingHtml(html, baseUrl) {
     }
   }
 
-  // Strategy C — reverse: h2/h3 first, find nearby content link
+  // Strategy C — h2/h3 then nearby content href
   if (results.length < 8) {
     const hRe = /<h([23])[^>]*>([\s\S]*?)<\/h\1>/gi
     while ((m = hRe.exec(html)) !== null) {
       const title = stripTags(m[2])
       if (!title || title.length < 2) continue
-      const window = html.slice(Math.max(0, m.index - 2500), m.index + 500)
+      const window = html.slice(Math.max(0, m.index - 3000), m.index + 800)
       const href =
-        match1(window, /href=["']((?:https?:\/\/[^"']+|\/)(?:\d+\/[a-z0-9\-]+|series\/[a-z0-9\-]+)[^"']*)["']/i) ||
+        match1(
+          window,
+          /href=["']((?:https?:\/\/[^"']+|\/)(?:\d+\/[a-z0-9\-]+|series\/[a-z0-9\-]+)[^"']*)["']/i,
+        ) ||
         match1(window, /href=["']((?:https?:\/\/[^"']+|\/)[^"']+)["'][^>]*class=["'][^"']*stretched/i)
       if (!href) continue
       const abs = resolveUrl(base, href)
-      const poster = extractPosterNearCard(window, base)
       pushItem({
         abs,
         title,
-        poster,
+        poster: extractPosterNearCard(window, base),
         type: /\/series\//i.test(abs || '') ? 'series' : 'movie',
       })
       if (results.length >= 60) break
     }
   }
 
-  // Strategy D — scrape all /{id}/{slug} links with title from link text / title attr
+  // Strategy D — every /{digits}/{slug} anchor
   if (results.length < 8) {
     const bareRe =
       /<a[^>]+href=["']((?:https?:\/\/[^"']+|\/)(?:\d+\/[a-z0-9\-]+(?:\/[^"']*)?))["'][^>]*>([\s\S]*?)<\/a>/gi
@@ -94,19 +99,40 @@ export function parseListingHtml(html, baseUrl) {
       if (!title || title.length < 3) {
         title = cleanTitle(
           match1(m[0], /title=["']([^"']+)["']/i) ||
-            match1(html.slice(Math.max(0, m.index - 200), m.index + 400), /<h[23][^>]*>([\s\S]*?)<\/h[23]>/i) ||
+            match1(
+              html.slice(Math.max(0, m.index - 300), m.index + 500),
+              /<h[23][^>]*>([\s\S]*?)<\/h[23]>/i,
+            ) ||
             '',
         )
       }
       if (!title) continue
-      // skip pure UI links
-      if (/^(دانلود مستقیم|بیشتر|مشاهده|next|prev)$/i.test(title)) continue
+      if (/^(دانلود مستقیم|بیشتر|مشاهده|next|prev|صفحه)$/i.test(title)) continue
       pushItem({
         abs,
         title,
         type: /\/series\//i.test(abs || '') ? 'series' : 'movie',
       })
       if (results.length >= 60) break
+    }
+  }
+
+  // Strategy E — bare href inventory (title from path slug)
+  if (results.length < 4) {
+    const hrefOnly =
+      /href=["']((?:https?:\/\/[^"']+|\/)\d+\/([a-z0-9\-]+)(?:\/[^"']*)?)["']/gi
+    while ((m = hrefOnly.exec(html)) !== null) {
+      const abs = resolveUrl(base, m[1])
+      const slug = m[2] || ''
+      const title = slug
+        .replace(/-/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+      pushItem({
+        abs,
+        title,
+        type: /\/series\//i.test(abs || '') ? 'series' : 'movie',
+      })
+      if (results.length >= 40) break
     }
   }
 
@@ -140,11 +166,16 @@ export function parseHomeRail(html, baseUrl, railIndex) {
   return parseListingHtml(chunk, baseUrl)
 }
 
+function isF2Host(hostname) {
+  const h = String(hostname || '').toLowerCase()
+  return F2_HOST_RE.test(h) || h.includes('myf2ms') || h.includes('film2med')
+}
+
 function isContentUrl(abs, base) {
   try {
     const u = new URL(abs)
     const b = new URL(base)
-    if (u.origin !== b.origin) return false
+    if (u.origin !== b.origin && !isF2Host(u.hostname)) return false
     const path = u.pathname.replace(/\/+$/, '')
     if (/\/(genres|category|tag|person|profile|login|movies|series)\/?$/i.test(path)) return false
     if (/\/series\/[a-z0-9\-]+$/i.test(path)) return true
@@ -163,11 +194,12 @@ function resolveUrl(base, href) {
   }
 }
 
+/** Prefer path relative to configured base (mirrors share paths). */
 function pathFromUrl(abs, base) {
   try {
     const u = new URL(abs)
     const b = new URL(base)
-    if (u.origin !== b.origin) return null
+    if (u.origin !== b.origin && !isF2Host(u.hostname)) return null
     return (u.pathname.replace(/^\/+/, '') + u.search).replace(/\/+$/, '')
   } catch {
     return null

@@ -27,14 +27,20 @@ import {
 } from './catalogs.js'
 
 const DEFAULT_BASE = 'https://www.myf2ms.top'
+const MIRROR_BASES = [
+  'https://www.myf2ms.top',
+  'https://www.film2med.top',
+  'https://film2med.top',
+]
 const PAGE_SIZE = 16
 const CACHE_LIST_MS = 8 * 60_000
+const CACHE_EMPTY_MS = 20_000
 const CACHE_DETAIL_MS = 10 * 60_000
 const CACHE_HTML_MS = 6 * 60_000
 const CACHE_META_MS = 30 * 60_000
 
 export function createF2MediaProvider(deps = {}) {
-  const http = deps.http || createHttpClient({ maxConcurrent: 6, timeoutMs: 15_000 })
+  const http = deps.http || createHttpClient({ maxConcurrent: 6, timeoutMs: 18_000 })
   const metaHttp = deps.metaHttp || createHttpClient({ maxConcurrent: 6, timeoutMs: 6_000 })
   const logger = deps.logger || console
   const cinemeta = deps.cinemeta || createCinemetaClient({ http: metaHttp })
@@ -117,12 +123,15 @@ export function createF2MediaProvider(deps = {}) {
       const base = this.baseUrl(ctx.config || {})
       const cacheKey = `search:${base}:${q.toLowerCase()}`
       const hit = cache.get(cacheKey)
-      if (Array.isArray(hit)) return hit
+      if (Array.isArray(hit) && hit.length > 0) return hit
 
       try {
         const url = `${base}/?s=${encodeURIComponent(q)}`
-        const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 15_000 })
-        if (!res.ok) return []
+        const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 18_000 })
+        if (!res.ok) {
+          logger.warn?.('f2media search HTTP', { status: res.status, url })
+          return []
+        }
         let parsed = parseSearchHtml(await res.text(), base)
 
         if (parsed.length === 0) {
@@ -137,12 +146,9 @@ export function createF2MediaProvider(deps = {}) {
 
         const items = mapItems(parsed)
         await enrichListMissingPosters(items, 14)
-        cache.set(cacheKey, items, CACHE_LIST_MS)
-        logger.info?.('f2media search', {
-          q,
-          count: items.length,
-          posters: items.filter((i) => i.poster).length,
-        })
+        if (items.length) cache.set(cacheKey, items, CACHE_LIST_MS)
+        else cache.set(cacheKey, items, CACHE_EMPTY_MS)
+        logger.info?.('f2media search', { q, count: items.length })
         return items
       } catch (err) {
         logger.warn?.('f2media search failed', { message: err.message })
@@ -153,25 +159,54 @@ export function createF2MediaProvider(deps = {}) {
     async browse(catalogId, ctx = {}) {
       const cat = getCatalogById(catalogId)
       if (!cat) return []
-      const base = this.baseUrl(ctx.config || {})
+      const primary = this.baseUrl(ctx.config || {})
       const skip = Number(ctx.skip) || 0
       const page = Math.floor(skip / PAGE_SIZE) + 1
-      const cacheKey = `browse:${base}:${catalogId}:${page}`
+      const cacheKey = `browse:${primary}:${catalogId}:${page}`
       const hit = cache.get(cacheKey)
-      if (Array.isArray(hit)) return hit
+      if (Array.isArray(hit) && hit.length > 0) return hit
+
+      const bases = [primary, ...MIRROR_BASES.filter((b) => b !== primary)]
 
       try {
         let parsed = []
-        const listUrl = catalogListUrl(base, cat, page)
-        const listHtml = await fetchHtml(http, listUrl, ctx, cache, `html:${listUrl}`)
-        if (listHtml) parsed = parseListingHtml(listHtml, base)
+        let usedBase = primary
+        let lastHtmlLen = 0
 
-        if (parsed.length === 0 && page === 1 && cat.homeRail) {
-          const homeHtml = await fetchHtml(http, base + '/', ctx, cache, `html:${base}:home`)
-          if (homeHtml) parsed = parseHomeRail(homeHtml, base, cat.homeRail)
+        for (const base of bases) {
+          const listUrl = catalogListUrl(base, cat, page)
+          const listHtml = await fetchHtml(http, listUrl, ctx, cache, `html:${listUrl}`)
+          lastHtmlLen = listHtml ? listHtml.length : 0
+          if (listHtml) {
+            parsed = parseListingHtml(listHtml, base)
+            logger.info?.('f2media browse try', {
+              catalogId,
+              listUrl,
+              htmlLen: listHtml.length,
+              parsed: parsed.length,
+            })
+          }
+          if (parsed.length === 0 && page === 1) {
+            const homeHtml = await fetchHtml(http, base + '/', ctx, cache, `html:${base}:home`)
+            if (homeHtml) {
+              lastHtmlLen = homeHtml.length
+              parsed = cat.homeRail
+                ? parseHomeRail(homeHtml, base, cat.homeRail)
+                : parseListingHtml(homeHtml, base)
+              logger.info?.('f2media browse home', {
+                catalogId,
+                base,
+                htmlLen: homeHtml.length,
+                parsed: parsed.length,
+              })
+            }
+          }
+          if (parsed.length > 0) {
+            usedBase = base
+            break
+          }
         }
 
-        // Catalog defines type — do not drop items when URL heuristic is wrong
         parsed = parsed.map((it) => ({
           ...it,
           type: cat.type || it.type,
@@ -179,13 +214,17 @@ export function createF2MediaProvider(deps = {}) {
 
         const items = mapItems(parsed.slice(0, 24))
         await enrichListMissingPosters(items, 18)
-        cache.set(cacheKey, items, CACHE_LIST_MS)
+        cache.set(
+          cacheKey,
+          items,
+          items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS,
+        )
         logger.info?.('f2media browse', {
           catalogId,
           page,
-          listUrl,
+          usedBase,
           count: items.length,
-          posters: items.filter((i) => i.poster).length,
+          lastHtmlLen,
         })
         return items
       } catch (err) {
@@ -208,7 +247,17 @@ export function createF2MediaProvider(deps = {}) {
 
       try {
         const pageUrl = `${base}/${pagePath}`
-        const res = await http.get(pageUrl, { timeoutMs: ctx.timeoutMs || 15_000 })
+        let res = await http.get(pageUrl, { timeoutMs: ctx.timeoutMs || 18_000 })
+        if (!res.ok) {
+          // try mirrors with same path
+          for (const mirror of MIRROR_BASES) {
+            if (mirror === base) continue
+            res = await http.get(`${mirror}/${pagePath}`, {
+              timeoutMs: ctx.timeoutMs || 15_000,
+            })
+            if (res.ok) break
+          }
+        }
         if (!res.ok) {
           logger.warn?.('detail HTTP', { status: res.status, pageUrl })
           return null
@@ -363,11 +412,15 @@ function mapItems(parsed) {
 async function fetchHtml(http, url, ctx, cache, cacheKey) {
   const hit = cache.get(cacheKey)
   if (typeof hit === 'string' && hit.length > 500) return hit
-  const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 15_000 })
-  if (!res.ok) return null
-  const text = await res.text()
-  if (text && text.length > 500) cache.set(cacheKey, text, CACHE_HTML_MS)
-  return text
+  try {
+    const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 18_000 })
+    if (!res.ok) return null
+    const text = await res.text()
+    if (text && text.length > 500) cache.set(cacheKey, text, CACHE_HTML_MS)
+    return text
+  } catch {
+    return null
+  }
 }
 
 function withTimeout(promise, ms) {

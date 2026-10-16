@@ -12,12 +12,14 @@ import { registerProvider, listEnabledProviders, getProvider } from '../../provi
 import { stubExampleProvider } from '../../providers/stub-example.js'
 import { createF2MediaProvider } from '../../providers/f2media/index.js'
 import { fromStremioProviderId, toStremioProviderId } from '../../core/ids/namespace.js'
+import { createHttpClient } from '../../core/http/client.js'
+import { parseListingHtml } from '../../providers/f2media/parse-listing.js'
 
 loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.2.8'
+const VERSION = process.env.ADDON_VERSION || '0.2.9'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -70,7 +72,8 @@ function createApp() {
 a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radius:12px;padding:1.5rem;border:1px solid #243044}</style></head>
 <body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
 <p>پوستر: اول سایت، بعد Cinemeta/MetaHub.</p>
-<ul><li><a href="/manifest.json">manifest</a></li><li><a href="/health">health</a></li></ul></div></body></html>`)
+<ul><li><a href="/manifest.json">manifest</a></li><li><a href="/health">health</a></li>
+<li><a href="/debug/f2">debug f2 listing</a></li></ul></div></body></html>`)
   })
 
   app.get('/health', (_req, res) => {
@@ -82,6 +85,37 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
       providers: listEnabledProviders(config).map((p) => p.key),
       time: new Date().toISOString(),
     })
+  })
+
+  // Live listing diagnostic — helps confirm site reachability + parser
+  app.get('/debug/f2', async (_req, res) => {
+    const base =
+      (process.env.F2MEDIA_BASEURL || 'https://www.myf2ms.top').replace(/\/+$/, '')
+    const url = `${base}/movies/`
+    const http = createHttpClient({ timeoutMs: 18_000 })
+    try {
+      const r = await http.get(url)
+      const text = r.ok ? await r.text() : ''
+      const parsed = text ? parseListingHtml(text, base) : []
+      res.json({
+        ok: r.ok,
+        status: r.status,
+        base,
+        url,
+        htmlLen: text.length,
+        parsed: parsed.length,
+        sample: parsed.slice(0, 5).map((p) => ({ title: p.title, path: p.pagePath })),
+        version: VERSION,
+      })
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        error: err.message,
+        base,
+        url,
+        version: VERSION,
+      })
+    }
   })
 
   app.get('/manifest.json', sendManifest)
@@ -112,7 +146,7 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
         return
       }
       try {
-        const items = await provider.search(search, { config, timeoutMs: 15_000 })
+        const items = await provider.search(search, { config, timeoutMs: 18_000 })
         const wantType = type === 'series' ? 'series' : 'movie'
         res.json({ metas: toMetas(items, providerKey, wantType) })
       } catch (err) {
@@ -129,7 +163,7 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
         return
       }
       try {
-        const items = await provider.browse(id, { config, skip, timeoutMs: 15_000 })
+        const items = await provider.browse(id, { config, skip, timeoutMs: 18_000 })
         res.json({ metas: toMetas(items, 'f2media', type) })
       } catch (err) {
         log.warn('catalog browse error', { message: err.message })
