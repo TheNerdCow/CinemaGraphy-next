@@ -19,7 +19,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.2.9'
+const VERSION = process.env.ADDON_VERSION || '0.3.0'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -71,7 +71,7 @@ function createApp() {
 <style>body{font-family:system-ui;background:#0b0d12;color:#e8eaef;padding:2rem}
 a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radius:12px;padding:1.5rem;border:1px solid #243044}</style></head>
 <body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
-<p>پوستر: اول سایت، بعد Cinemeta/MetaHub.</p>
+<p>کاتالوگ + ژانر + استریم F2Media</p>
 <ul><li><a href="/manifest.json">manifest</a></li><li><a href="/health">health</a></li>
 <li><a href="/debug/f2">debug f2 listing</a></li></ul></div></body></html>`)
   })
@@ -87,7 +87,6 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
     })
   })
 
-  // Live listing diagnostic — helps confirm site reachability + parser
   app.get('/debug/f2', async (_req, res) => {
     const base =
       (process.env.F2MEDIA_BASEURL || 'https://www.myf2ms.top').replace(/\/+$/, '')
@@ -128,29 +127,53 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
     const extraRaw =
       req.params.extraArgs ||
       req.params[0] ||
-      (req.url.includes('/search=') || req.url.includes('/skip=')
+      (req.url.includes('/search=') ||
+      req.url.includes('/skip=') ||
+      req.url.includes('/genre=')
         ? req.url.split('/').pop()
         : '')
     const extra = parseExtra(extraRaw)
     const search = extra.search ? String(extra.search) : ''
+    const genre = extra.genre ? String(extra.genre) : ''
     const skip = extra.skip ? Number(extra.skip) : 0
 
-    log.info('catalog request', { type, id, search: search || undefined, skip })
+    log.info('catalog request', {
+      type,
+      id,
+      search: search || undefined,
+      genre: genre || undefined,
+      skip,
+    })
 
-    const searchMatch = id.match(/^([a-z0-9]+)_(movies|series)$/i)
-    if (searchMatch && search) {
-      const providerKey = searchMatch[1].toLowerCase()
+    const typeCatalog = id.match(/^([a-z0-9]+)_(movies|series)$/i)
+    if (typeCatalog) {
+      const providerKey = typeCatalog[1].toLowerCase()
       const provider = getProvider(providerKey)
-      if (!provider?.search || !provider.isEnabled(config)) {
+      if (!provider || !provider.isEnabled(config)) {
         res.json({ metas: [] })
         return
       }
+      const wantType = type === 'series' ? 'series' : 'movie'
       try {
-        const items = await provider.search(search, { config, timeoutMs: 18_000 })
-        const wantType = type === 'series' ? 'series' : 'movie'
+        let items = []
+        if (search && provider.search) {
+          items = await provider.search(search, { config, timeoutMs: 18_000 })
+        } else if (genre && provider.browseGenre) {
+          items = await provider.browseGenre(wantType, genre, {
+            config,
+            skip,
+            timeoutMs: 18_000,
+          })
+        } else if (provider.browseType) {
+          items = await provider.browseType(wantType, {
+            config,
+            skip,
+            timeoutMs: 18_000,
+          })
+        }
         res.json({ metas: toMetas(items, providerKey, wantType) })
       } catch (err) {
-        log.warn('catalog search error', { message: err.message })
+        log.warn('catalog type/search/genre error', { message: err.message })
         res.json({ metas: [] })
       }
       return

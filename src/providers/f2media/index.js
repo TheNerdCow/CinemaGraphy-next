@@ -25,6 +25,7 @@ import {
   toManifestCatalogs,
   catalogListUrl,
 } from './catalogs.js'
+import { resolveGenre, genreListUrl } from './genres.js'
 
 const DEFAULT_BASE = 'https://www.myf2ms.top'
 const MIRROR_BASES = [
@@ -87,6 +88,16 @@ export function createF2MediaProvider(deps = {}) {
         }
       }),
     )
+    return items
+  }
+
+  async function listFromUrl(listUrl, base, type, ctx) {
+    const listHtml = await fetchHtml(http, listUrl, ctx, cache, `html:${listUrl}`)
+    if (!listHtml) return []
+    let parsed = parseListingHtml(listHtml, base)
+    parsed = parsed.map((it) => ({ ...it, type: type || it.type }))
+    const items = mapItems(parsed.slice(0, 24))
+    await enrichListMissingPosters(items, 18)
     return items
   }
 
@@ -156,6 +167,68 @@ export function createF2MediaProvider(deps = {}) {
       }
     },
 
+    /** Genre listing: /genres/{slug}/?type=movie|series */
+    async browseGenre(type, genreLabel, ctx = {}) {
+      const kind = type === 'series' ? 'series' : 'movie'
+      const g = resolveGenre(genreLabel, kind)
+      if (!g) {
+        logger.warn?.('unknown genre', { genreLabel, type: kind })
+        return []
+      }
+      const primary = this.baseUrl(ctx.config || {})
+      const skip = Number(ctx.skip) || 0
+      const page = Math.floor(skip / PAGE_SIZE) + 1
+      const cacheKey = `genre:${primary}:${kind}:${g.slug}:${page}`
+      const hit = cache.get(cacheKey)
+      if (Array.isArray(hit) && hit.length > 0) return hit
+
+      const bases = [primary, ...MIRROR_BASES.filter((b) => b !== primary)]
+      try {
+        let items = []
+        for (const base of bases) {
+          const listUrl = genreListUrl(base, kind, g.slug, page)
+          items = await listFromUrl(listUrl, base, kind, ctx)
+          logger.info?.('f2media genre', {
+            slug: g.slug,
+            type: kind,
+            listUrl,
+            count: items.length,
+          })
+          if (items.length) break
+        }
+        cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
+        return items
+      } catch (err) {
+        logger.warn?.('f2media genre failed', { message: err.message, genre: g.slug })
+        return []
+      }
+    },
+
+    /** Default film/series rails when no search/genre */
+    async browseType(type, ctx = {}) {
+      const kind = type === 'series' ? 'series' : 'movie'
+      const path = kind === 'series' ? '/series/' : '/movies/'
+      const primary = this.baseUrl(ctx.config || {})
+      const skip = Number(ctx.skip) || 0
+      const page = Math.floor(skip / PAGE_SIZE) + 1
+      const cacheKey = `type:${primary}:${kind}:${page}`
+      const hit = cache.get(cacheKey)
+      if (Array.isArray(hit) && hit.length > 0) return hit
+
+      try {
+        const listUrl =
+          page <= 1
+            ? `${primary}${path}`
+            : `${primary}${path}page/${page}/`
+        const items = await listFromUrl(listUrl, primary, kind, ctx)
+        cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
+        return items
+      } catch (err) {
+        logger.warn?.('f2media browseType failed', { message: err.message, type: kind })
+        return []
+      }
+    },
+
     async browse(catalogId, ctx = {}) {
       const cat = getCatalogById(catalogId)
       if (!cat) return []
@@ -193,12 +266,6 @@ export function createF2MediaProvider(deps = {}) {
               parsed = cat.homeRail
                 ? parseHomeRail(homeHtml, base, cat.homeRail)
                 : parseListingHtml(homeHtml, base)
-              logger.info?.('f2media browse home', {
-                catalogId,
-                base,
-                htmlLen: homeHtml.length,
-                parsed: parsed.length,
-              })
             }
           }
           if (parsed.length > 0) {
@@ -249,7 +316,6 @@ export function createF2MediaProvider(deps = {}) {
         const pageUrl = `${base}/${pagePath}`
         let res = await http.get(pageUrl, { timeoutMs: ctx.timeoutMs || 18_000 })
         if (!res.ok) {
-          // try mirrors with same path
           for (const mirror of MIRROR_BASES) {
             if (mirror === base) continue
             res = await http.get(`${mirror}/${pagePath}`, {
