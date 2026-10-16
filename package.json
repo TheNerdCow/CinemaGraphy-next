@@ -1,9 +1,9 @@
 {
   "name": "cinemagraphy-next",
-  "version": "0.1.3",
+  "version": "0.2.7",
   "private": true,
   "type": "module",
-  "description": "Independent modular CinemaGraphy rewrite (Stremio/Nuvio). Clean-room — not a fork of production.",
+  "description": "Independent modular CinemaGraphy rewrite (Stremio). Clean-room — not a fork of production.",
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "node src/runtimes/node/server.js",

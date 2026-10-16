@@ -4,26 +4,25 @@
 
 Clean-room · new git history · **does not** replace production (`cmplugin.ir`).
 
-## Status: scaffold `0.1.0`
+## Status: `0.2.7` (stabilization)
 
 | Area | State |
 |------|--------|
 | Core config (`full` / `streams` / `catalogs`) | Done |
 | SSRF-safe HTTP client | Done |
 | Internal IDs + Stremio id mapping | Done |
-| Stremio manifest builder | Done |
-| Provider registry + stub | Done |
-| Node runtime (`/manifest.json`, `/health`) | Done |
-| Unit tests | **14 passing** |
-| Real Iranian providers | Not yet |
-| Cloudflare / configure UI | Not yet |
+| Stremio manifest + catalog/meta/stream routes | Done |
+| F2Media search / browse catalogs / streams | Done |
+| Metadata | **Cinemeta + MetaHub** (no API key) |
+| Unit / provider fixture tests | `npm test` |
+| Nuvio dedicated adapter | Not yet (Stremio protocol works in Nuvio clients) |
+| Cloudflare Workers runtime | Not yet |
 
-## Docs
+## Metadata
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Feature parity](docs/FEATURE_PARITY.md)
-- [Reference audit](docs/REFERENCE_AUDIT.md)
-- [Progress](docs/PROGRESS.md)
+- Primary: public [Cinemeta](https://v3-cinemeta.strem.io) (no key).
+- Posters / backgrounds: `images.metahub.space` when an IMDb id is known.
+- Stream playback does **not** depend on metadata success.
 
 ## Local run
 
@@ -35,6 +34,7 @@ cp .env.example .env
 npm test
 npm start
 # http://127.0.0.1:7000/manifest.json
+# http://127.0.0.1:7000/health
 ```
 
 Streams-only mode:

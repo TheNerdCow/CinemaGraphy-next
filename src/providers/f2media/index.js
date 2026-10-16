@@ -1,8 +1,6 @@
 /**
- * F2Media provider — restored simple path that worked early on.
- * - Streams always from site HTML (priority)
- * - Posters from Cinemeta/metahub (permissive for images only; never rename)
- * - TMDB optional, only if TMDB_API_KEY set (not required)
+ * F2Media provider — stream-first; Cinemeta/metahub for optional posters (no API key).
+ * TMDB is not used on the normal runtime path.
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
@@ -13,7 +11,6 @@ import {
   metahubPoster,
   metahubBackground,
 } from '../../core/meta/cinemeta.js'
-import { createTmdbClient } from '../../core/meta/tmdb.js'
 import {
   parseSearchHtml,
   parseDetailStreams,
@@ -40,13 +37,12 @@ export function createF2MediaProvider(deps = {}) {
   const metaHttp = deps.metaHttp || createHttpClient({ maxConcurrent: 6, timeoutMs: 6_000 })
   const logger = deps.logger || console
   const cinemeta = deps.cinemeta || createCinemetaClient({ http: metaHttp })
-  const tmdb = deps.tmdb || createTmdbClient({ http: metaHttp })
   const cache = deps.cache || createMemoryCache(CACHE_LIST_MS)
 
   /**
- * Permissive image lookup — same spirit as first working version.
- * Uses first solid Cinemeta hit; does NOT change the display title.
- */
+   * Optional images from Cinemeta only. Never renames title. Never throws.
+   * Missing meta must not affect streams.
+   */
   async function lookupImages(title, year, type) {
     if (!title) return {}
     const key = `meta:${type}:${title}:${year || ''}`
@@ -56,37 +52,19 @@ export function createF2MediaProvider(deps = {}) {
     const t = type === 'series' ? 'series' : 'movie'
     const out = {}
 
-    // Optional TMDB (only if key present)
-    if (tmdb.enabled) {
-      try {
-        const row = await withTimeout(tmdb.search(title, t), 4000)
-        if (row?.poster) {
-          out.poster = row.poster
-          out.background = row.background || row.poster
-          out.imdb = row.imdb
-          out.description = row.description
-        }
-      } catch {
-        /* ignore */
+    try {
+      const q = year ? `${title} ${year}` : title
+      const found = await withTimeout(cinemeta.search(q, t), 5000)
+      if (found?.imdb) {
+        out.poster = metahubPoster(found.imdb) || found.poster
+        out.background = metahubBackground(found.imdb) || found.background || out.poster
+        out.imdb = found.imdb
+        out.description = found.description
+        out.genres = found.genres
+        out.imdbRating = found.imdbRating
       }
-    }
-
-    // Cinemeta (primary, like day one)
-    if (!out.poster) {
-      try {
-        const q = year ? `${title} ${year}` : title
-        const found = await withTimeout(cinemeta.search(q, t), 5000)
-        if (found?.imdb) {
-          out.poster = metahubPoster(found.imdb) || found.poster
-          out.background = metahubBackground(found.imdb) || found.background || out.poster
-          out.imdb = found.imdb
-          if (!out.description) out.description = found.description
-          out.genres = found.genres
-          out.imdbRating = found.imdbRating
-        }
-      } catch {
-        /* ignore */
-      }
+    } catch {
+      /* metadata optional */
     }
 
     cache.set(key, out, CACHE_META_MS)
@@ -97,9 +75,13 @@ export function createF2MediaProvider(deps = {}) {
     const n = Math.min(items.length, limit)
     await Promise.all(
       items.slice(0, n).map(async (it) => {
-        const img = await lookupImages(it.title, it.year, it.type)
-        if (img.poster) it.poster = img.poster
-        if (img.imdb) it.imdb = img.imdb
+        try {
+          const img = await lookupImages(it.title, it.year, it.type)
+          if (img.poster) it.poster = img.poster
+          if (img.imdb) it.imdb = img.imdb
+        } catch {
+          /* keep item without poster */
+        }
       }),
     )
     return items
@@ -114,7 +96,6 @@ export function createF2MediaProvider(deps = {}) {
       streams: true,
       providerMeta: true,
       auth: 'none',
-      tmdb: Boolean(tmdb.enabled),
     },
 
     isEnabled(config) {
@@ -147,7 +128,6 @@ export function createF2MediaProvider(deps = {}) {
         if (!res.ok) return []
         let parsed = parseSearchHtml(await res.text(), base)
 
-        // one fallback without year if empty
         if (parsed.length === 0) {
           const q2 = q.replace(/\b(19|20)\d{2}\b/g, '').replace(/\s+/g, ' ').trim()
           if (q2 && q2 !== q) {
@@ -159,9 +139,14 @@ export function createF2MediaProvider(deps = {}) {
         }
 
         const items = mapItems(parsed)
+        // Best-effort posters; list is valid even if enrich fails
         await enrichList(items, 14)
         cache.set(cacheKey, items, CACHE_LIST_MS)
-        logger.info?.('f2media search', { q, count: items.length, posters: items.filter((i) => i.poster).length })
+        logger.info?.('f2media search', {
+          q,
+          count: items.length,
+          posters: items.filter((i) => i.poster).length,
+        })
         return items
       } catch (err) {
         logger.warn?.('f2media search failed', { message: err.message })
@@ -181,7 +166,6 @@ export function createF2MediaProvider(deps = {}) {
 
       try {
         let parsed = []
-        // Prefer category/list URL (more reliable posters context than homepage rail alone)
         const listUrl = catalogListUrl(base, cat, page)
         const listHtml = await fetchHtml(http, listUrl, ctx, cache, `html:${listUrl}`)
         if (listHtml) parsed = parseListingHtml(listHtml, base)
@@ -233,12 +217,12 @@ export function createF2MediaProvider(deps = {}) {
         const html = await res.text()
         const meta = parseDetailMeta(html, base)
 
-        // Series only if path or explicit type says so — movies must stay movies
         const isSeries =
           type === 'series' ||
           /\/series\//i.test(pagePath) ||
           (meta.type === 'series' && /\/series\//i.test(pagePath))
 
+        // Streams first — independent of Cinemeta
         let streams = []
         let episodes = []
         let videos = []
@@ -248,7 +232,6 @@ export function createF2MediaProvider(deps = {}) {
           episodes = parsed.episodes
           videos = parsed.videos
           streams = episodes.flatMap((e) => e.streams)
-          // fallback: some series pages use movie-style download-list
           if (streams.length === 0) {
             streams = parseDetailStreams(html, base)
           }
@@ -256,11 +239,20 @@ export function createF2MediaProvider(deps = {}) {
           streams = parseDetailStreams(html, base)
         }
 
-        const img = await lookupImages(
-          meta.title,
-          meta.year,
-          isSeries ? 'series' : 'movie',
-        )
+        // Optional enrich; failure leaves streams intact
+        let img = {}
+        try {
+          img = await lookupImages(meta.title, meta.year, isSeries ? 'series' : 'movie')
+        } catch {
+          img = {}
+        }
+
+        // Prefer site IMDb when present for stable metahub URLs
+        const imdb = meta.imdb || img.imdb
+        const poster =
+          (imdb && metahubPoster(imdb)) || img.poster || undefined
+        const background =
+          (imdb && metahubBackground(imdb)) || img.background || poster
 
         const detail = {
           id: itemId,
@@ -268,9 +260,9 @@ export function createF2MediaProvider(deps = {}) {
           type: isSeries ? 'series' : 'movie',
           title: meta.title,
           year: meta.year,
-          imdb: img.imdb || meta.imdb,
-          poster: img.poster,
-          background: img.background || img.poster,
+          imdb,
+          poster,
+          background,
           description: img.description || meta.description,
           genres: img.genres,
           imdbRating: img.imdbRating,
@@ -279,7 +271,6 @@ export function createF2MediaProvider(deps = {}) {
           videos,
         }
 
-        // Cache even with 0 streams briefly to avoid stampede; short TTL
         cache.set(
           cacheKey,
           detail,
@@ -310,7 +301,6 @@ export function createF2MediaProvider(deps = {}) {
           (e) => Number(e.season) === Number(season) && Number(e.episode) === Number(episode),
         )
         if (ep?.streams?.length) return ep.streams.map(toStream)
-        // fallback all movie-style streams on series page
         if (detail.streams?.length) return detail.streams.map(toStream)
         return []
       }

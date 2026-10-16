@@ -1,13 +1,13 @@
 /**
  * Typed application config + merge rules.
  * Modes: full | streams | catalogs
+ *
+ * No mandatory API keys. Cinemeta is the metadata source (public, keyless).
  */
 
 import { ADDON_MODES } from '../models/types.js'
 
 const SENSITIVE_KEYS = new Set([
-  'tmdbKey',
-  'TMDB_API_KEY',
   'cookie',
   'password',
   'DIGIMOVIE_COOKIE',
@@ -31,7 +31,7 @@ export function defaultConfig() {
     nameSuffix: '',
     addonName: 'سینماگرافی',
     addonId: 'com.cinemagraphy.next',
-    version: '0.1.0',
+    version: '0.2.7',
     externalCatalogs: [],
     browseCatalogs: {},
   }
@@ -75,7 +75,6 @@ export function configFromEnv(env = process.env, overlay = {}) {
 
   if (env.META_LANG === 'en' || env.META_LANG === 'fa') base.meta.lang = env.META_LANG
   if (env.UI_LANG === 'en' || env.UI_LANG === 'fa') base.ui.lang = env.UI_LANG
-  if (env.TMDB_API_KEY) base.meta.tmdbKey = String(env.TMDB_API_KEY)
 
   const timeout = Number(env.PROVIDER_TIMEOUT_MS)
   if (Number.isFinite(timeout) && timeout > 0) base.timeouts.providerMs = timeout
@@ -123,7 +122,6 @@ export function decodeUserConfig(encoded) {
     if (obj.meta && typeof obj.meta === 'object') {
       out.meta = {
         lang: obj.meta.lang === 'en' ? 'en' : 'fa',
-        ...(obj.meta.tmdbKey ? { tmdbKey: String(obj.meta.tmdbKey) } : {}),
       }
     }
     if (obj.ui && typeof obj.ui === 'object') {
