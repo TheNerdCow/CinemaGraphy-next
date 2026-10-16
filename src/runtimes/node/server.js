@@ -11,6 +11,7 @@ import { buildStremioManifest } from '../../clients/stremio/manifest.js'
 import { registerProvider, listEnabledProviders, getProvider } from '../../providers/registry.js'
 import { stubExampleProvider } from '../../providers/stub-example.js'
 import { createF2MediaProvider } from '../../providers/f2media/index.js'
+import { createCinamaticProvider } from '../../providers/cinamatic/index.js'
 import { fromStremioProviderId, toStremioProviderId } from '../../core/ids/namespace.js'
 import { createHttpClient } from '../../core/http/client.js'
 import { parseListingHtml } from '../../providers/f2media/parse-listing.js'
@@ -19,10 +20,11 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.3.0'
+const VERSION = process.env.ADDON_VERSION || '0.3.1'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
+registerProvider(createCinamaticProvider({ logger: log }))
 
 function resolveConfig(req) {
   const server = configFromEnv(process.env)
@@ -71,9 +73,9 @@ function createApp() {
 <style>body{font-family:system-ui;background:#0b0d12;color:#e8eaef;padding:2rem}
 a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radius:12px;padding:1.5rem;border:1px solid #243044}</style></head>
 <body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
-<p>کاتالوگ + ژانر + استریم F2Media</p>
+<p>F2Media + Cinamatic</p>
 <ul><li><a href="/manifest.json">manifest</a></li><li><a href="/health">health</a></li>
-<li><a href="/debug/f2">debug f2 listing</a></li></ul></div></body></html>`)
+<li><a href="/debug/f2">debug f2</a></li></ul></div></body></html>`)
   })
 
   app.get('/health', (_req, res) => {
@@ -179,15 +181,17 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
       return
     }
 
-    if (id.startsWith('f2media_') && !search) {
-      const provider = getProvider('f2media')
+    // Editorial browse catalogs: f2media_* or cinamatic_*
+    if ((id.startsWith('f2media_') || id.startsWith('cinamatic_')) && !search) {
+      const providerKey = id.startsWith('cinamatic_') ? 'cinamatic' : 'f2media'
+      const provider = getProvider(providerKey)
       if (!provider?.browse || !provider.isEnabled(config) || config.mode === 'streams') {
         res.json({ metas: [] })
         return
       }
       try {
         const items = await provider.browse(id, { config, skip, timeoutMs: 18_000 })
-        res.json({ metas: toMetas(items, 'f2media', type) })
+        res.json({ metas: toMetas(items, providerKey, type) })
       } catch (err) {
         log.warn('catalog browse error', { message: err.message })
         res.json({ metas: [] })
