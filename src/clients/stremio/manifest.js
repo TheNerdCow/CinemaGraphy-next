@@ -2,6 +2,8 @@
  * Stremio manifest builder from AppConfig + provider registry capabilities.
  */
 
+import { movieGenreNames, seriesGenreNames } from '../../providers/f2media/genres.js'
+
 export function buildStremioManifest(config, providers = []) {
   const name = [config.addonName, config.nameSuffix].filter(Boolean).join('')
   const resources = []
@@ -36,19 +38,35 @@ export function buildStremioManifest(config, providers = []) {
 
   if (config.resources.catalog) {
     for (const p of providers) {
-      // Search catalogs — FA names, no English Movies/Series in our string
       if (p.capabilities?.search) {
+        const movieGenres =
+          p.key === 'f2media' ? movieGenreNames() : p.capabilities.movieGenres || []
+        const seriesGenres =
+          p.key === 'f2media' ? seriesGenreNames() : p.capabilities.seriesGenres || []
+
+        // Film catalog: searchable + optional genre (Discover dropdown)
+        const movieExtra = [
+          { name: 'genre', options: movieGenres, isRequired: false },
+          { name: 'search', isRequired: false },
+          { name: 'skip', isRequired: false },
+        ]
         catalogs.push({
           id: `${p.key}_movies`,
           type: 'movie',
-          name: lang === 'en' ? `${p.name} Search` : `جستجو ${p.name} (فیلم)`,
-          extra: [{ name: 'search', isRequired: true }],
+          name: lang === 'en' ? `${p.name} Movies` : `${p.name} — فیلم`,
+          extra: movieExtra.filter((e) => e.name !== 'genre' || (e.options && e.options.length)),
         })
+
+        const seriesExtra = [
+          { name: 'genre', options: seriesGenres, isRequired: false },
+          { name: 'search', isRequired: false },
+          { name: 'skip', isRequired: false },
+        ]
         catalogs.push({
           id: `${p.key}_series`,
           type: 'series',
-          name: lang === 'en' ? `${p.name} Search` : `جستجو ${p.name} (سریال)`,
-          extra: [{ name: 'search', isRequired: true }],
+          name: lang === 'en' ? `${p.name} Series` : `${p.name} — سریال`,
+          extra: seriesExtra.filter((e) => e.name !== 'genre' || (e.options && e.options.length)),
         })
       }
       for (const c of p.capabilities?.browseCatalogs || []) {

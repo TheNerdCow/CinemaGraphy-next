@@ -88,7 +88,6 @@ export function toManifestCatalogs(lang = 'fa') {
   return F2_CATALOGS.map((c) => ({
     id: c.id,
     type: c.type,
-    // Short name only — clients often append type themselves
     name: lang === 'en' ? c.nameEn : c.nameFa,
     extra: [{ name: 'skip', isRequired: false }],
   }))
