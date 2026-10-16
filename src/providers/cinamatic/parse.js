@@ -1,7 +1,6 @@
 /**
  * Cinamatic (cinamatic.top) HTML parsers.
  * Paths: /YYYY/MM/DD/slug/ — WordPress date permalinks.
- * Listing pages mix a hero rail of popular series; we strip that and keep category body only.
  */
 
 import {
@@ -9,6 +8,8 @@ import {
   formatStreamLabel,
   analyzeMediaUrl,
   extractQuality,
+  extractSizeFromText,
+  extractEncoderFromText,
 } from '../f2media/parse-streams-shared.js'
 
 export function encodePageId(pagePath) {
@@ -27,9 +28,6 @@ export function decodePageId(itemId) {
   }
 }
 
-/**
- * Drop shared homepage hero (برترین…) so category pages only yield that category.
- */
 function categoryBody(html, forceType) {
   const markers =
     forceType === 'movie'
@@ -48,7 +46,6 @@ function categoryBody(html, forceType) {
     }
   }
   if (start > 200) return html.slice(start)
-  // fallback: cut after first long hero block if present
   const hero = html.search(/برترین\s*(فیلم|سریال)/i)
   if (hero >= 0) {
     const afterHero = html.indexOf('ادامه و دانلود', hero)
@@ -63,7 +60,6 @@ export function parseListingHtml(html, baseUrl, forceType) {
   const results = []
   const seen = new Set()
 
-  // Prefer explicit title links inside category cards: h2 > a or a around «ادامه و دانلود»
   const patterns = [
     /<h2[^>]*>\s*<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>\s*<\/h2>/gi,
     /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>\s*<h2[^>]*>([\s\S]*?)<\/h2>/gi,
@@ -83,18 +79,8 @@ export function parseListingHtml(html, baseUrl, forceType) {
       if (/^(ادامه|دانلود|مشاهده|تریلر|ورود|عضویت|برترین)/i.test(title)) continue
 
       const window = body.slice(Math.max(0, m.index - 400), m.index + 900)
-
-      // Hero series bleed: «قسمت N از فصل» next to card → skip on movie catalog
       if (forceType === 'movie' && /قسمت\s*\d+\s*از\s*فصل|پایان\s*فصل/i.test(window)) {
         continue
-      }
-      // On series/anime catalog skip pure movie cards if strongly labeled فیلم only + runtime without قسمت
-      if (
-        forceType === 'series' &&
-        /مدت\s*زمان\s*:/i.test(window) &&
-        !/قسمت|فصل|سریال/i.test(window)
-      ) {
-        // still allow — category page should already be series
       }
 
       const poster = extractPoster(window, base)
@@ -109,7 +95,7 @@ export function parseListingHtml(html, baseUrl, forceType) {
         poster: poster || undefined,
         pagePath,
       })
-      if (results.length >= 36) break
+      if (results.length >= 40) break
     }
     if (results.length >= 12) break
   }
@@ -123,7 +109,38 @@ function inferType(window, title) {
 }
 
 export function parseSearchHtml(html, baseUrl) {
-  return parseListingHtml(html, baseUrl, null)
+  // Search results page — no category hero cut
+  return parseListingHtmlKeepAll(html, baseUrl)
+}
+
+function parseListingHtmlKeepAll(html, baseUrl) {
+  const base = String(baseUrl || '').replace(/\/+$/, '')
+  const results = []
+  const seen = new Set()
+  const linkRe =
+    /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
+  let m
+  while ((m = linkRe.exec(html)) !== null) {
+    const abs = resolveUrl(base, m[1])
+    if (!abs || !isContentUrl(abs, base)) continue
+    const pagePath = pathFromUrl(abs, base)
+    if (!pagePath || seen.has(pagePath)) continue
+    let title = cleanTitle(stripTags(m[2]))
+    if (!title || title.length < 2) continue
+    if (/^(ادامه|دانلود|مشاهده|تریلر|ورود|عضویت)/i.test(title)) continue
+    const window = html.slice(Math.max(0, m.index - 400), m.index + 800)
+    seen.add(pagePath)
+    results.push({
+      itemId: encodePageId(pagePath),
+      title,
+      year: extractYear(title) || extractYear(window) || undefined,
+      type: inferType(window, title),
+      poster: extractPoster(window, base),
+      pagePath,
+    })
+    if (results.length >= 50) break
+  }
+  return results
 }
 
 export function parseDetailMeta(html, baseUrl) {
@@ -151,33 +168,16 @@ export function parseDetailMeta(html, baseUrl) {
   }
 }
 
-/**
- * Collect playable links. For series, attach season/episode from section headers
- * like «فصل 1 - زیرنویس کیفیت 1080» then «قسمت 3».
- */
 export function parseDetailStreams(html, baseUrl) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const out = []
   const seen = new Set()
 
-  // Pre-scan section headers with positions for season/quality/audio context
   const sections = []
-  const secRe =
-    /فصل\s*(\d+)\s*[-–—]?\s*(دوبله\s*فارسی|زیرنویس)?[^<]{0,40}?کیفیت\s*(2160|1080|720|480)/gi
-  let sm
-  while ((sm = secRe.exec(html)) !== null) {
-    sections.push({
-      index: sm.index,
-      season: Number(sm[1]),
-      audio: /دوبله/i.test(sm[2] || '') ? 'dub' : /زیرنویس/i.test(sm[2] || '') ? 'sub' : null,
-      quality: sm[3] ? `${sm[3]}p` : null,
-    })
-  }
-  // Also: «فصل 1 - زیرنویس کیفیت 1080» without optional group
   const secRe2 =
     /فصل\s*(\d+)[^\n<]{0,80}?(دوبله|زیرنویس)?[^\n<]{0,40}?(2160|1080|720|480)/gi
+  let sm
   while ((sm = secRe2.exec(html)) !== null) {
-    if (sections.some((s) => Math.abs(s.index - sm.index) < 20)) continue
     sections.push({
       index: sm.index,
       season: Number(sm[1]),
@@ -207,18 +207,23 @@ export function parseDetailStreams(html, baseUrl) {
     if (/تریلر|trailer/i.test(text) && /trailers\//i.test(abs)) continue
     seen.add(abs)
 
-    const local = html.slice(Math.max(0, am.index - 400), am.index + am[0].length + 80)
+    const local = html.slice(Math.max(0, am.index - 500), am.index + am[0].length + 100)
     const localText = stripTags(local) + ' ' + text
     const fromUrl = analyzeMediaUrl(abs)
     const sec = sectionAt(am.index)
 
+    // Button labels like "1080 x265 1.6GB" or "720 949MB"
     const quality =
       fromUrl.quality ||
-      extractQuality(localText) ||
       extractQuality(text) ||
+      extractQuality(localText) ||
       sec?.quality ||
       null
-    const size = extractSize(localText) || extractSize(text)
+    const size =
+      extractSizeFromText(text) ||
+      extractSizeFromText(localText) ||
+      fromUrl.size ||
+      null
     let audio = fromUrl.audio || sec?.audio || null
     if (!audio) {
       if (/دوبله/i.test(localText)) audio = 'dub'
@@ -226,11 +231,19 @@ export function parseDetailStreams(html, baseUrl) {
     }
     const codec =
       fromUrl.codec ||
-      (/x265|HEVC/i.test(localText) ? 'x265' : /x264/i.test(localText) ? 'x264' : null)
+      (/x265|HEVC/i.test(text + localText) ? 'x265' : /x264/i.test(text + localText) ? 'x264' : null)
+    const encoder =
+      fromUrl.encoder ||
+      extractEncoderFromText(abs) ||
+      extractEncoderFromText(text) ||
+      extractEncoderFromText(localText) ||
+      null
+    const source =
+      fromUrl.source ||
+      (/BluRay|BDRip/i.test(localText) ? 'BluRay' : /WEB-?DL/i.test(localText) ? 'WEB-DL' : null)
 
     let seasonEp = extractSeasonEpisode(abs, localText)
     if (!seasonEp.episode) {
-      // «قسمت 3 678MB» as link text
       const epOnly = text.match(/قسمت\s*(\d+)/i) || localText.match(/قسمت\s*(\d+)/i)
       if (epOnly) {
         seasonEp = {
@@ -245,8 +258,9 @@ export function parseDetailStreams(html, baseUrl) {
       quality,
       size,
       audio,
-      source: fromUrl.source,
+      source,
       codec,
+      encoder,
       hdr: fromUrl.hdr,
       bit10: fromUrl.bit10,
       providerName: 'Cinamatic',
@@ -359,12 +373,6 @@ function extractPoster(htmlSlice, base) {
 function extractYear(text) {
   const m = String(text).match(/\b(19|20)\d{2}\b/)
   return m ? Number(m[0]) : null
-}
-
-function extractSize(text) {
-  const m = String(text).match(/\b(\d+(?:\.\d+)?\s*(?:GB|MB|گیگ|مگ))\b/i)
-  if (!m) return null
-  return m[1].replace(/گیگ/i, 'GB').replace(/مگ/i, 'MB')
 }
 
 function cleanTitle(t) {

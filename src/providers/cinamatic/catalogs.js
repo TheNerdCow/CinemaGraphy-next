@@ -33,7 +33,10 @@ export function toManifestCatalogs() {
     id: c.id,
     type: c.type,
     name: c.nameFa,
-    extra: [{ name: 'skip', isRequired: false }],
+    extra: [
+      { name: 'search', isRequired: false },
+      { name: 'skip', isRequired: false },
+    ],
   }))
 }
 

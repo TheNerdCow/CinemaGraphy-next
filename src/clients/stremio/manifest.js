@@ -38,13 +38,14 @@ export function buildStremioManifest(config, providers = []) {
 
   if (config.resources.catalog) {
     for (const p of providers) {
-      if (p.capabilities?.search) {
+      // Cinamatic already ships film/series/anime browse catalogs with search —
+      // do not add a second "Cinamatic — فیلم" via the generic search pair.
+      if (p.capabilities?.search && p.key !== 'cinamatic') {
         const movieGenres =
           p.key === 'f2media' ? movieGenreNames() : p.capabilities.movieGenres || []
         const seriesGenres =
           p.key === 'f2media' ? seriesGenreNames() : p.capabilities.seriesGenres || []
 
-        // Film catalog: searchable + optional genre (Discover dropdown)
         const movieExtra = [
           { name: 'genre', options: movieGenres, isRequired: false },
           { name: 'search', isRequired: false },

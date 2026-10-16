@@ -26,7 +26,7 @@ export function formatStreamLabel(info = {}) {
   if (info.quality) {
     const q = String(info.quality)
     if (/2160|4K/i.test(q)) tech.push('2160p')
-    else tech.push(q)
+    else tech.push(q.endsWith('p') || /4K/i.test(q) ? q : q)
   }
   if (info.hdr) tech.push('HDR')
   if (info.bit10) tech.push('10bit')
@@ -46,11 +46,13 @@ export function formatStreamLabel(info = {}) {
   return lines.join('\n')
 }
 
+const ENCODER_RE =
+  /\b(PSA|YIFY|YTS|RARBG|FLUX|CMRG|ETHEL|KyoGo|SPARKS|EVO|FUM|NTB|NTb|AMZN|NF|ATVP|HULU|DSNP|iT|MeGusta|QxR|Tigole|Wxn|UTR|Joy|Pahe|Judas|Yui|BRiNK|d3g|MZON|HONE|SB|GalaxyRG|aXXo|FGT|ANOX|RZeroX|RMTeam|MkvCage|ION10|TBS|DIMENSION)\b/i
+
 export function analyzeMediaUrl(url) {
   const u = String(url)
   const quality = extractQuality(u)
   let audio = null
-  // Path folders used by F2: 4DUB, RSUB, SUB, DUB, FixNamaDUB, …
   if (
     /\/4DUB\/|\/DUB\/|Farsi\.4Dubbed|Farsi\.Dubbed|\bDubbed\b|دوبله/i.test(u)
   ) {
@@ -61,7 +63,7 @@ export function analyzeMediaUrl(url) {
     audio = 'sub'
   }
 
-  const source = /BluRay/i.test(u)
+  const source = /BluRay|BDRip|BRRip/i.test(u)
     ? 'BluRay'
     : /WEB-?DL/i.test(u)
       ? 'WEB-DL'
@@ -69,20 +71,59 @@ export function analyzeMediaUrl(url) {
         ? 'WEBRip'
         : /HDTV/i.test(u)
           ? 'HDTV'
-          : null
-  const codec = /x265|HEVC/i.test(u) ? 'x265' : /x264|AVC/i.test(u) ? 'x264' : null
+          : /HDRip/i.test(u)
+            ? 'HDRip'
+            : null
+  const codec = /x265|HEVC|h\.265/i.test(u)
+    ? 'x265'
+    : /x264|AVC|h\.264/i.test(u)
+      ? 'x264'
+      : null
   const hdr = /\bHDR10|\bHDR\b|\bDV\b|Dolby.?Vision/i.test(u)
-  const bit10 = /10bit|10-bit/i.test(u)
+  const bit10 = /10bit|10-bit|Hi10/i.test(u)
   const encoder =
-    match1(u, /\.(PSA|YIFY|KyoGo|ETHEL|RARBG|FLUX|CMRG)(?:\.|$)/i) ||
-    match1(u, /[\/._-](PSA|YIFY|KyoGo|ETHEL)[\/._-]/i)
-  return { quality, audio, source, codec, hdr: Boolean(hdr), bit10: Boolean(bit10), encoder }
+    match1(u, ENCODER_RE) ||
+    match1(u, /\.(PSA|YIFY|KyoGo|ETHEL|RARBG|FLUX|CMRG)(?:\.|$)/i)
+  const size = extractSizeFromText(u)
+  return {
+    quality,
+    audio,
+    source,
+    codec,
+    hdr: Boolean(hdr),
+    bit10: Boolean(bit10),
+    encoder: encoder || null,
+    size: size || null,
+  }
 }
 
 export function extractQuality(text) {
   const t = String(text)
-  if (/\b2160p\b|\b4K\b/i.test(t)) return '2160p'
-  const m = t.match(/\b(1080p|720p|480p|360p)\b/i)
+  if (/\b2160p\b|\b4K\b|\bUHD\b/i.test(t)) return '2160p'
+  // bare 1080 / 720 next to size (Cinamatic button text)
+  const m =
+    t.match(/\b(1080p|720p|480p|360p)\b/i) ||
+    t.match(/\b(2160|1080|720|480|360)\s*(?:p\b|(?=\s*(?:x265|x264|GB|MB|\d)))/i)
+  if (!m) return null
+  const n = m[1].replace(/p$/i, '')
+  return /p$/i.test(m[1]) ? m[1] : `${n}p`
+}
+
+/** Size from URL or button label: 2GB, 1.6GB, 842MB, ۲ گیگ */
+export function extractSizeFromText(text) {
+  const t = String(text)
+  let m = t.match(/(\d+(?:[.,]\d+)?)\s*(GB|MB|گیگ(?:ابایت)?|مگ(?:ابایت)?)/i)
+  if (!m) m = t.match(/(\d+(?:[.,]\d+)?)(GB|MB)\b/i)
+  if (!m) return null
+  const num = m[1].replace(',', '.')
+  let unit = m[2].toUpperCase()
+  if (/گیگ/i.test(m[2])) unit = 'GB'
+  if (/مگ/i.test(m[2])) unit = 'MB'
+  return `${num} ${unit}`
+}
+
+export function extractEncoderFromText(text) {
+  const m = String(text).match(ENCODER_RE)
   return m ? m[1] : null
 }
 

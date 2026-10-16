@@ -1,6 +1,6 @@
 /**
  * Cinamatic provider (cinamatic.top) — independent of F2Media.
- * Catalogs: film / series / anime. Stream-first; optional Cinemeta posters.
+ * Catalogs: film / series / anime only (no duplicate generic film catalog).
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
@@ -17,17 +17,16 @@ import {
   parseDetailMeta,
   parseDetailStreams,
   buildSeriesVideos,
-  encodePageId,
   decodePageId,
 } from './parse.js'
-import { getCatalogById, toManifestCatalogs, catalogListUrl } from './catalogs.js'
+import { getCatalogById, toManifestCatalogs } from './catalogs.js'
 
 const DEFAULT_BASE = 'https://cinamatic.top'
 const PAGE_SIZE = 16
+const SEARCH_MAX_PAGES = 3
 const CACHE_LIST_MS = 8 * 60_000
 const CACHE_EMPTY_MS = 25_000
 const CACHE_DETAIL_MS = 10 * 60_000
-const CACHE_HTML_MS = 6 * 60_000
 const CACHE_META_MS = 30 * 60_000
 
 export function createCinamaticProvider(deps = {}) {
@@ -95,7 +94,6 @@ export function createCinamaticProvider(deps = {}) {
       if (config.providersEnabled?.length) {
         return config.providersEnabled.includes('cinamatic')
       }
-      // default on (same as f2) — user can disable later via configure
       return true
     },
 
@@ -106,28 +104,50 @@ export function createCinamaticProvider(deps = {}) {
       return raw.replace(/\/+$/, '') || DEFAULT_BASE
     },
 
+    /**
+     * Multi-page search: page 1..SEARCH_MAX_PAGES merged, then skip slice.
+     * WP search URLs: /page/N/?s=query  or  /?s=query&paged=N
+     */
     async search(query, ctx = {}) {
       const q = String(query || '').trim()
       if (!q) return []
       const base = this.baseUrl(ctx.config || {})
+      const skip = Number(ctx.skip) || 0
       const cacheKey = `cina-search:${base}:${q.toLowerCase()}`
-      const hit = cache.get(cacheKey)
-      if (Array.isArray(hit) && hit.length) return hit
+      let all = cache.get(cacheKey)
 
-      try {
-        const url = `${base}/?s=${encodeURIComponent(q)}`
-        const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 18_000 })
-        if (!res.ok) return []
-        const parsed = parseSearchHtml(await res.text(), base)
-        const items = mapItems(parsed)
-        await enrichMissing(items, 12)
-        cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
-        logger.info?.('cinamatic search', { q, count: items.length })
-        return items
-      } catch (err) {
-        logger.warn?.('cinamatic search failed', { message: err.message })
-        return []
+      if (!Array.isArray(all) || all.length === 0) {
+        all = []
+        const seen = new Set()
+        try {
+          for (let page = 1; page <= SEARCH_MAX_PAGES; page++) {
+            const url =
+              page <= 1
+                ? `${base}/?s=${encodeURIComponent(q)}`
+                : `${base}/page/${page}/?s=${encodeURIComponent(q)}`
+            const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 18_000 })
+            if (!res.ok) break
+            const parsed = parseSearchHtml(await res.text(), base)
+            let added = 0
+            for (const it of parsed) {
+              if (seen.has(it.pagePath)) continue
+              seen.add(it.pagePath)
+              all.push(it)
+              added++
+            }
+            logger.info?.('cinamatic search page', { q, page, added, total: all.length })
+            if (parsed.length < 5) break
+          }
+          all = mapItems(all)
+          await enrichMissing(all, 16)
+          cache.set(cacheKey, all, all.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
+        } catch (err) {
+          logger.warn?.('cinamatic search failed', { message: err.message })
+          return []
+        }
       }
+
+      return all.slice(skip, skip + PAGE_SIZE * 2)
     },
 
     async browseType(type, ctx = {}) {
@@ -267,7 +287,6 @@ export function createCinamaticProvider(deps = {}) {
           (e) => Number(e.season) === Number(season) && Number(e.episode) === Number(episode),
         )
         if (ep?.streams?.length) return ep.streams.map(toStream)
-        // fallback: streams tagged with same ep
         const tagged = (detail.streams || []).filter(
           (s) =>
             Number(s.season || 1) === Number(season) &&
@@ -278,7 +297,6 @@ export function createCinamaticProvider(deps = {}) {
       }
 
       if (!detail.streams?.length) return []
-      // movies: all streams; series without ep context: avoid dumping every ep
       if (detail.type === 'series') {
         return detail.streams.filter((s) => !s.episode).map(toStream)
       }
