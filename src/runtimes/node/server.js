@@ -20,7 +20,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.3.1'
+const VERSION = process.env.ADDON_VERSION || '0.3.2'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -181,7 +181,6 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
       return
     }
 
-    // Editorial browse catalogs: f2media_* or cinamatic_*
     if ((id.startsWith('f2media_') || id.startsWith('cinamatic_')) && !search) {
       const providerKey = id.startsWith('cinamatic_') ? 'cinamatic' : 'f2media'
       const provider = getProvider(providerKey)
