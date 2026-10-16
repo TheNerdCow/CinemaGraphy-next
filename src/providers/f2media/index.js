@@ -171,9 +171,11 @@ export function createF2MediaProvider(deps = {}) {
           if (homeHtml) parsed = parseHomeRail(homeHtml, base, cat.homeRail)
         }
 
-        parsed = parsed.filter(
-          (it) => it.type === cat.type || cat.id === 'f2media_coming_soon',
-        )
+        // Catalog defines type — do not drop items when URL heuristic is wrong
+        parsed = parsed.map((it) => ({
+          ...it,
+          type: cat.type || it.type,
+        }))
 
         const items = mapItems(parsed.slice(0, 24))
         await enrichListMissingPosters(items, 18)
@@ -181,6 +183,7 @@ export function createF2MediaProvider(deps = {}) {
         logger.info?.('f2media browse', {
           catalogId,
           page,
+          listUrl,
           count: items.length,
           posters: items.filter((i) => i.poster).length,
         })
