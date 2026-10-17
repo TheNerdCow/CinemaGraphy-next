@@ -1,7 +1,12 @@
 /**
  * AvaMovie provider — subscription / cookie session.
- * Primary host: avamovie.shop (avadel.top often unreachable outside IR).
- * Requires AVAMOVIE_COOKIE (or session cookie from landing) for listings & streams.
+ *
+ * Inside Iran: avadel.top is reachable; avamovie.shop is often filtered.
+ * Outside Iran: avadel.top may timeout; avamovie.shop works via Cloudflare.
+ *
+ * Strategy: try preferred base first, but only accept HTML that looks like a
+ * real listing/detail (has item-movie / downloadbox / title_en). Filtered or
+ * soft-block pages are skipped and the next mirror is tried.
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
@@ -23,22 +28,23 @@ import {
 import {
   getCatalogById,
   toManifestCatalogs,
-  catalogListUrl,
   genreListUrl,
   AVA_MOVIE_GENRES,
   AVA_SERIES_GENRES,
 } from './catalogs.js'
 
-const DEFAULT_BASE = 'https://avamovie.shop'
-const MIRROR_BASES = ['https://avamovie.shop', 'https://avadel.top']
+/** Primary for IR users (unfiltered). */
+const DEFAULT_BASE = 'https://avadel.top'
+/** Fallback for outside IR / when primary fails. */
+const MIRROR_BASES = ['https://avadel.top', 'https://avamovie.shop']
 const PAGE_SIZE = 24
 const CACHE_LIST_MS = 8 * 60_000
-const CACHE_EMPTY_MS = 12_000
+const CACHE_EMPTY_MS = 8_000
 const CACHE_DETAIL_MS = 10 * 60_000
 const CACHE_META_MS = 30 * 60_000
 
 export function createAvaMovieProvider(deps = {}) {
-  const http = deps.http || createHttpClient({ maxConcurrent: 4, timeoutMs: 25_000 })
+  const http = deps.http || createHttpClient({ maxConcurrent: 4, timeoutMs: 22_000 })
   const metaHttp = deps.metaHttp || createHttpClient({ maxConcurrent: 4, timeoutMs: 6_000 })
   const logger = deps.logger || console
   const cinemeta = deps.cinemeta || createCinemetaClient({ http: metaHttp })
@@ -50,20 +56,21 @@ export function createAvaMovieProvider(deps = {}) {
     return String(fromConfig || fromEnv || '').trim()
   }
 
-  function authHeaders(config) {
-    const cookie = cookieOf(config)
-    if (!cookie) return {}
-    return {
-      Cookie: cookie,
-      Referer: `${thisBase(config)}/`,
-    }
-  }
-
   function thisBase(config) {
     const fromConfig = config?.providers?.avamovie?.baseUrl
     const fromEnv = process.env.AVAMOVIE_BASEURL
     const raw = (fromConfig || fromEnv || DEFAULT_BASE).trim()
     return raw.replace(/\/+$/, '') || DEFAULT_BASE
+  }
+
+  function authHeaders(config, base) {
+    const cookie = cookieOf(config)
+    if (!cookie) return {}
+    return {
+      Cookie: cookie,
+      Referer: `${base || thisBase(config)}/`,
+      Origin: base || thisBase(config),
+    }
   }
 
   function candidateBases(config) {
@@ -80,33 +87,74 @@ export function createAvaMovieProvider(deps = {}) {
     return out
   }
 
-  async function fetchHtml(pathOrUrl, config, timeoutMs) {
+  /** True if HTML looks like real AvaMovie content, not a filter/login shell. */
+  function isUsefulHtml(html, kind = 'list') {
+    if (!html || html.length < 800) return false
+    const h = html
+    if (kind === 'list' || kind === 'search') {
+      if (/item-movie/i.test(h) || /class="[^"]*title_en[^"]*"/i.test(h)) return true
+      // search sometimes uses different card markup
+      if (/archive-posts/i.test(h) && /title_en/i.test(h)) return true
+      return false
+    }
+    // detail
+    if (/downloadbox|dl-item|link-main/i.test(h)) return true
+    if (/yserver|\.mkv|\.mp4/i.test(h)) return true
+    if (/og:title/i.test(h) && /avadel|avamovie/i.test(h)) return true
+    return false
+  }
+
+  async function fetchHtml(pathOrUrl, config, timeoutMs, kind = 'list') {
     const bases = candidateBases(config)
-    const headers = authHeaders(config)
+    const attempts = []
     let lastErr = null
+
     for (const base of bases) {
       const url = pathOrUrl.startsWith('http')
         ? pathOrUrl.replace(/^https?:\/\/[^/]+/i, base)
         : `${base}${pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`}`
+
       try {
-        const res = await http.get(url, { timeoutMs: timeoutMs || 25_000, headers })
+        const res = await http.get(url, {
+          timeoutMs: timeoutMs || 22_000,
+          headers: authHeaders(config, base),
+        })
         if (!res.ok) {
+          attempts.push({ base, url, status: res.status, reason: 'http' })
           lastErr = new Error(`HTTP ${res.status} ${url}`)
           logger.warn?.('avamovie HTTP', { status: res.status, url })
           continue
         }
         const html = await res.text()
-        if (!html || html.length < 400) {
-          lastErr = new Error(`short body ${url}`)
+        const useful = isUsefulHtml(html, kind)
+        attempts.push({
+          base,
+          url,
+          status: res.status,
+          htmlLen: html.length,
+          useful,
+          itemMovie: (html.match(/item-movie/gi) || []).length,
+        })
+        if (!useful) {
+          lastErr = new Error(`useless body on ${base} (filter/login?)`)
+          logger.warn?.('avamovie skip non-content host', {
+            base,
+            url,
+            htmlLen: html.length,
+          })
           continue
         }
-        return { html, base, url, status: res.status }
+        return { html, base, url, status: res.status, attempts }
       } catch (err) {
+        attempts.push({ base, url, error: err.message })
         lastErr = err
         logger.warn?.('avamovie fetch failed', { url, message: err.message })
       }
     }
-    throw lastErr || new Error('avamovie unreachable')
+
+    const err = lastErr || new Error('avamovie unreachable')
+    err.attempts = attempts
+    throw err
   }
 
   async function lookupImages(title, year, type) {
@@ -196,7 +244,7 @@ export function createAvaMovieProvider(deps = {}) {
           page <= 1
             ? `/?s=${encodeURIComponent(q)}`
             : `/page/${page}/?s=${encodeURIComponent(q)}`
-        const { html, base } = await fetchHtml(path, config, ctx.timeoutMs || 25_000)
+        const { html, base } = await fetchHtml(path, config, ctx.timeoutMs || 22_000, 'search')
         const parsed = parseSearchHtml(html, base)
         const items = mapItems(parsed)
         await enrichMissing(items, 12)
@@ -204,7 +252,10 @@ export function createAvaMovieProvider(deps = {}) {
         logger.info?.('avamovie search', { q, page, count: items.length, base })
         return items
       } catch (err) {
-        logger.warn?.('avamovie search failed', { message: err.message })
+        logger.warn?.('avamovie search failed', {
+          message: err.message,
+          attempts: err.attempts,
+        })
         return []
       }
     },
@@ -224,17 +275,18 @@ export function createAvaMovieProvider(deps = {}) {
       const hit = cache.get(cacheKey)
       if (Array.isArray(hit) && hit.length) return hit
       try {
-        const primary = thisBase(config)
-        const listUrl = genreListUrl(primary, kind, genre, page)
-        const path = listUrl.replace(primary, '')
-        const { html, base } = await fetchHtml(path.startsWith('http') ? listUrl : path, config, ctx.timeoutMs || 25_000)
+        // build path relative to host so fetchHtml can swap mirrors
+        const dummy = 'https://host.invalid'
+        const full = genreListUrl(dummy, kind, genre, page)
+        const path = full.replace(dummy, '')
+        const { html, base } = await fetchHtml(path, config, ctx.timeoutMs || 22_000, 'list')
         const parsed = parseListingHtml(html, base, kind)
         const items = mapItems(parsed)
         await enrichMissing(items, 12)
         cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
         return items
       } catch (err) {
-        logger.warn?.('avamovie genre failed', { message: err.message, genre })
+        logger.warn?.('avamovie genre failed', { message: err.message, genre, attempts: err.attempts })
         return []
       }
     },
@@ -261,7 +313,12 @@ export function createAvaMovieProvider(deps = {}) {
         let listPath = path.startsWith('/') ? path : `/${path}`
         listPath = listPath.replace(/\/+$/, '') + '/'
         if (page > 1) listPath = `${listPath}page/${page}/`
-        const { html, base, url } = await fetchHtml(listPath, config, ctx.timeoutMs || 25_000)
+        const { html, base, url } = await fetchHtml(
+          listPath,
+          config,
+          ctx.timeoutMs || 22_000,
+          'list',
+        )
 
         if (/login-form|خرید اشتراک|buy-subscription/i.test(html) && !/item-movie/i.test(html)) {
           logger.warn?.('avamovie possible auth wall', { url, htmlLen: html.length })
@@ -272,10 +329,14 @@ export function createAvaMovieProvider(deps = {}) {
         const items = mapItems(parsed)
         await enrichMissing(items, 12)
         cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
-        logger.info?.('avamovie browse', { catalogId, page, url, count: items.length })
+        logger.info?.('avamovie browse', { catalogId, page, url, base, count: items.length })
         return items
       } catch (err) {
-        logger.warn?.('avamovie browse failed', { message: err.message, catalogId })
+        logger.warn?.('avamovie browse failed', {
+          message: err.message,
+          catalogId,
+          attempts: err.attempts,
+        })
         return []
       }
     },
@@ -293,7 +354,7 @@ export function createAvaMovieProvider(deps = {}) {
       if (hit && (hit.streams?.length || hit.videos?.length)) return hit
 
       try {
-        const { html, base } = await fetchHtml(`/${pagePath}`, config, ctx.timeoutMs || 25_000)
+        const { html, base } = await fetchHtml(`/${pagePath}`, config, ctx.timeoutMs || 22_000, 'detail')
         const meta = parseDetailMeta(html, base)
         const streams = parseDetailStreams(html, base)
 
@@ -361,7 +422,11 @@ export function createAvaMovieProvider(deps = {}) {
         })
         return detail
       } catch (err) {
-        logger.warn?.('avamovie detail failed', { message: err.message, itemId })
+        logger.warn?.('avamovie detail failed', {
+          message: err.message,
+          itemId,
+          attempts: err.attempts,
+        })
         return null
       }
     },
