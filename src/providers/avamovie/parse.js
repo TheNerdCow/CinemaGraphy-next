@@ -2,13 +2,16 @@
  * AvaMovie HTML parsers — item-movie cards, downloadbox / dl-item streams.
  */
 
+const AVA_HOSTS = new Set(['avadel.top', 'avamovie.shop', 'www.avamovie.shop'])
+
 export function parseListingHtml(html, baseUrl, forceType) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const results = []
   const seen = new Set()
 
   // Cards: class="item-movie"
-  const cardRe = /class="[^"]*item-movie[^"]*"[\s\S]*?(?=class="[^"]*item-movie|site-pagination|<\/main>|<footer|$)/gi
+  const cardRe =
+    /class="[^"]*item-movie[^"]*"[\s\S]*?(?=class="[^"]*item-movie|site-pagination|<\/main>|<footer|$)/gi
   let m
   while ((m = cardRe.exec(html)) !== null) {
     const block = m[0]
@@ -62,7 +65,8 @@ export function parseListingHtml(html, baseUrl, forceType) {
 
   // Fallback: titled detail links
   if (results.length < 4) {
-    const linkRe = /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*title=["']([^"']+)["']/gi
+    const linkRe =
+      /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*title=["']([^"']+)["']/gi
     let lm
     while ((lm = linkRe.exec(html)) !== null) {
       const abs = resolveUrl(base, lm[1])
@@ -103,7 +107,9 @@ export function parseDetailMeta(html, baseUrl) {
     match1(html, /property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
     match1(html, /"thumbnailUrl"\s*:\s*"(https?:[^"\\]+)"/i)
   if (poster) poster = resolveUrl(base, poster) || poster
-  const type = /\/series\//i.test(match1(html, /property=["']og:url["'][^>]*content=["']([^"']+)["']/i) || '')
+  const type = /\/series\//i.test(
+    match1(html, /property=["']og:url["'][^>]*content=["']([^"']+)["']/i) || '',
+  )
     ? 'series'
     : /TVSeries|series/i.test(html.slice(0, 8000))
       ? 'series'
@@ -127,16 +133,16 @@ export function parseDetailStreams(html, baseUrl) {
   const out = []
   const seen = new Set()
 
-  // Prefer structured downloadbox region
   const boxes = []
-  const boxRe = /class="[^"]*downloadbox[^"]*"[\s\S]*?(?=class="[^"]*single-related|class="[^"]*downloadbox|<footer|$)/gi
+  const boxRe =
+    /class="[^"]*downloadbox[^"]*"[\s\S]*?(?=class="[^"]*single-related|class="[^"]*downloadbox|<footer|$)/gi
   let bm
   while ((bm = boxRe.exec(html)) !== null) boxes.push(bm[0])
   if (!boxes.length) boxes.push(html)
 
   for (const box of boxes) {
-    // Series seasons
-    const itemRe = /class="[^"]*dl-item[^"]*"[\s\S]*?(?=class="[^"]*dl-item|class="[^"]*single-related|$)/gi
+    const itemRe =
+      /class="[^"]*dl-item[^"]*"[\s\S]*?(?=class="[^"]*dl-item|class="[^"]*single-related|$)/gi
     let im
     let foundSeason = false
     while ((im = itemRe.exec(box)) !== null) {
@@ -145,8 +151,10 @@ export function parseDetailStreams(html, baseUrl) {
       const seasonFa = match1(block, /class="season"[^>]*>([\s\S]*?)<\/span>/i)
       const season = persianSeason(seasonFa) || 1
       collectEpisodeLinks(block, base, out, seen, season)
-      // quality-level size on card
-      const cardSize = match1(block, /class="size"[^>]*>[\s\S]*?<span class="label">[\s\S]*?<\/span>\s*([^<]+)/i)
+      const cardSize = match1(
+        block,
+        /class="size"[^>]*>[\s\S]*?<span class="label">[\s\S]*?<\/span>\s*([^<]+)/i,
+      )
       if (cardSize) {
         for (const s of out.slice(-12)) {
           if (!s.size) s.size = normalizeSize(cardSize)
@@ -158,7 +166,6 @@ export function parseDetailStreams(html, baseUrl) {
     }
   }
 
-  // Full-page safety net for CDN mkv links
   collectMovieLinks(html, base, out, seen)
 
   const rank = (s) => {
@@ -231,7 +238,8 @@ function collectMovieLinks(html, base, out, seen) {
 }
 
 function collectEpisodeLinks(block, base, out, seen, season) {
-  const aRe = /<a[^>]+href=["']([^"']+)["'][^>]*(?:title=["']([^"']*)["'])?[^>]*(?:>([\s\S]*?)<\/a>|(?:\s*\/>))/gi
+  const aRe =
+    /<a[^>]+href=["']([^"']+)["'][^>]*(?:title=["']([^"']*)["'])?[^>]*(?:>([\s\S]*?)<\/a>|(?:\s*\/>))/gi
   let am
   while ((am = aRe.exec(block)) !== null) {
     const href = decodeHtml(am[1])
@@ -240,19 +248,16 @@ function collectEpisodeLinks(block, base, out, seen, season) {
     const isAudioOnly = /\.(mka|aac|mp3)(\?|$)/i.test(href)
     seen.add(href)
 
-    const epFromUrl = match1(href, /[Ss]0?(\d+)[Ee]0?(\d+)/)
-    const epFromTitle = match1(am[2] || '', /(\\d+)/) || match1(am[3] || '', /قسمت\s*([\d\u06f0-\u06f9]+)/)
+    const full = href.match(/[Ss]0?(\d+)[Ee]0?(\d+)/)
     let episode = null
     let seasonNum = season
-    if (epFromUrl) {
-      // re-parse both
-      const full = href.match(/[Ss]0?(\d+)[Ee]0?(\d+)/)
-      if (full) {
-        seasonNum = Number(full[1]) || season
-        episode = Number(full[2])
-      }
-    } else if (epFromTitle) {
-      episode = Number(toAsciiDigits(epFromTitle))
+    if (full) {
+      seasonNum = Number(full[1]) || season
+      episode = Number(full[2])
+    } else {
+      const epFromTitle =
+        match1(am[2] || '', /(\d+)/) || match1(am[3] || '', /قسمت\s*([\d\u06f0-\u06f9]+)/)
+      if (epFromTitle) episode = Number(toAsciiDigits(epFromTitle))
     }
 
     const start = Math.max(0, am.index - 400)
@@ -305,24 +310,24 @@ function analyze(url, ctx) {
     bit10: Boolean(bit10),
     encoder,
     providerName: 'AvaMovie',
-    providerEmoji: '\ud83c\udfa5',
+    providerEmoji: '🎬',
   }
 }
 
 function formatLabel(info) {
   const lines = []
-  lines.push(`${info.providerEmoji || '\ud83c\udfa5'} منبع: ${info.providerName || 'AvaMovie'}`)
+  lines.push(`${info.providerEmoji || '🎬'} منبع: ${info.providerName || 'AvaMovie'}`)
   const qParts = []
   if (info.quality) qParts.push(info.quality)
   if (info.source) qParts.push(info.source)
   if (info.codec) qParts.push(info.codec)
   if (info.bit10) qParts.push('10bit')
   if (info.hdr) qParts.push('HDR')
-  if (qParts.length) lines.push(`\ud83d\udcfa کیفیت: ${qParts.join(' ')}`)
-  if (info.audio === 'sub') lines.push('\ud83d\udcdd زیرنویس: زیرنویس چسبیده فارسی')
-  if (info.audio === 'dub') lines.push('\ud83c\udfa4 دوبله: دوبله فارسی')
-  if (info.size) lines.push(`\ud83d\udce6 حجم: ${info.size}`)
-  if (info.encoder) lines.push(`\u2699\ufe0f انکدر: ${info.encoder}`)
+  if (qParts.length) lines.push(`📺 کیفیت: ${qParts.join(' ')}`)
+  if (info.audio === 'sub') lines.push('📝 زیرنویس: زیرنویس چسبیده فارسی')
+  if (info.audio === 'dub') lines.push('🎤 دوبله: دوبله فارسی')
+  if (info.size) lines.push(`📦 حجم: ${info.size}`)
+  if (info.encoder) lines.push(`⚙️ انکدر: ${info.encoder}`)
   if (info.season != null && info.episode != null) {
     lines.push(`S${info.season}E${info.episode}`)
   }
@@ -392,8 +397,11 @@ function sameSite(a, b) {
   try {
     const ha = new URL(a).hostname.replace(/^www\./i, '').toLowerCase()
     const hb = new URL(b).hostname.replace(/^www\./i, '').toLowerCase()
-    // allow avadel.top / avamovie.shop sibling hosts for path extract from base host only
-    return ha === hb || ha.endsWith(hb) || hb.endsWith(ha)
+    if (ha === hb) return true
+    // sibling AvaMovie hosts share the same content paths
+    if (AVA_HOSTS.has(ha) && AVA_HOSTS.has(hb)) return true
+    if (AVA_HOSTS.has(ha) && !hb) return true
+    return false
   } catch {
     return false
   }
