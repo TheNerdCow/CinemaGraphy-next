@@ -21,7 +21,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.4.2'
+const VERSION = process.env.ADDON_VERSION || '0.4.3'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -184,7 +184,6 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
             timeoutMs: 18_000,
           })
         }
-        // Fallback: F2 editorial updated rail if type listing empty
         if (
           !items.length &&
           !search &&
