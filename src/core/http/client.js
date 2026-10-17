@@ -1,8 +1,10 @@
 /**
  * HttpClient — timeout, size limit, SSRF, safe manual redirects.
- * Always re-applies caller headers (Cookie) on every hop — undici "follow"
- * can drop cookies across hosts and infinite Location loops raise
- * "redirect count exceeded".
+ *
+ * Critical: intermediate 3xx responses often set cookies (WAF / LiteSpeed /
+ * WordPress). Undici "follow" and naive manual follow that only resend the
+ * original Cookie header can loop on 307→same-URL. We merge Set-Cookie into
+ * the jar for subsequent hops.
  */
 
 import { validateFetchUrl } from './ssrf.js'
@@ -23,8 +25,16 @@ export function createHttpClient(opts = {}) {
 
   const defaultHeaders = opts.defaultHeaders ?? {
     'User-Agent': BROWSER_UA,
-    Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+    Accept:
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Accept-Language': 'fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
   }
 
   async function slot() {
@@ -53,9 +63,10 @@ export function createHttpClient(opts = {}) {
 
   async function requestOnce(url, init = {}) {
     let current = String(url)
-    const seen = new Set()
+    const seen = new Map() // url -> hit count (allow one retry after cookie merge)
     const chain = []
-    const headers = { ...defaultHeaders, ...(init.headers || {}) }
+    const baseHeaders = { ...defaultHeaders, ...(init.headers || {}) }
+    const jar = cookieJarFromHeader(baseHeaders.Cookie || baseHeaders.cookie || '')
     const method = init.method || 'GET'
     const limit = init.maxRedirects ?? MAX_REDIRECTS
 
@@ -68,13 +79,26 @@ export function createHttpClient(opts = {}) {
       }
 
       const normalized = check.url.toString()
-      if (seen.has(normalized)) {
+      const hits = seen.get(normalized) || 0
+      if (hits >= 2) {
         const err = new Error(`Redirect loop at ${normalized}`)
         err.code = 'REDIRECT_LOOP'
         err.chain = chain
         throw err
       }
-      seen.add(normalized)
+      seen.set(normalized, hits + 1)
+
+      const headers = { ...baseHeaders }
+      const cookieStr = jarToHeader(jar)
+      if (cookieStr) headers.Cookie = cookieStr
+      else delete headers.Cookie
+
+      // After first hop, site is same-origin navigation
+      if (i > 0) {
+        headers['Sec-Fetch-Site'] = 'same-origin'
+        headers['Sec-Fetch-Mode'] = 'navigate'
+        headers['Sec-Fetch-Dest'] = 'document'
+      }
 
       const ac = new AbortController()
       const t = setTimeout(() => ac.abort(), init.timeoutMs ?? timeoutMs)
@@ -86,11 +110,16 @@ export function createHttpClient(opts = {}) {
           signal: ac.signal,
         })
 
-        chain.push({ url: normalized, status: res.status })
+        mergeSetCookie(jar, res.headers)
+
+        chain.push({
+          url: normalized,
+          status: res.status,
+          setCookie: countSetCookie(res.headers),
+        })
 
         if ([301, 302, 303, 307, 308].includes(res.status)) {
           const loc = res.headers.get('location')
-          // drain body so socket can reuse
           try {
             await res.arrayBuffer()
           } catch {
@@ -102,7 +131,9 @@ export function createHttpClient(opts = {}) {
             err.chain = chain
             throw err
           }
-          current = new URL(loc, normalized).toString()
+          const next = new URL(loc, normalized).toString()
+          // Same URL 307 often means "retry with new cookies" — allow one more hit
+          current = next
           continue
         }
 
@@ -138,4 +169,56 @@ export function createHttpClient(opts = {}) {
     get: (url, init) => request(url, { ...init, method: 'GET' }),
     request,
   }
+}
+
+function cookieJarFromHeader(cookieHeader) {
+  const jar = new Map()
+  const raw = String(cookieHeader || '').trim()
+  if (!raw) return jar
+  for (const part of raw.split(';')) {
+    const idx = part.indexOf('=')
+    if (idx <= 0) continue
+    const name = part.slice(0, idx).trim()
+    const value = part.slice(idx + 1).trim()
+    if (!name) continue
+    jar.set(name, value)
+  }
+  return jar
+}
+
+function jarToHeader(jar) {
+  if (!jar || jar.size === 0) return ''
+  return [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ')
+}
+
+function mergeSetCookie(jar, headers) {
+  // Node fetch: getSetCookie() when available; else fall back to get('set-cookie')
+  let list = []
+  if (typeof headers.getSetCookie === 'function') {
+    list = headers.getSetCookie() || []
+  } else {
+    const single = headers.get('set-cookie')
+    if (single) list = [single]
+  }
+  for (const line of list) {
+    const first = String(line).split(';')[0]
+    const idx = first.indexOf('=')
+    if (idx <= 0) continue
+    const name = first.slice(0, idx).trim()
+    const value = first.slice(idx + 1).trim()
+    if (!name) continue
+    // deletion
+    if (!value || /deleted/i.test(value)) {
+      jar.delete(name)
+    } else {
+      jar.set(name, value)
+    }
+  }
+}
+
+function countSetCookie(headers) {
+  if (typeof headers.getSetCookie === 'function') {
+    return (headers.getSetCookie() || []).length
+  }
+  return headers.get('set-cookie') ? 1 : 0
 }
