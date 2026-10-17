@@ -86,6 +86,7 @@ export function configFromEnv(env = process.env, overlay = {}) {
       .filter(Boolean)
   }
 
+  // BASEURL overrides
   for (const [key, value] of Object.entries(env)) {
     const m = /^([A-Z0-9]+)_BASEURL$/.exec(key)
     if (!m || !value) continue
@@ -95,10 +96,26 @@ export function configFromEnv(env = process.env, overlay = {}) {
     base.providers[normalized].enabled = true
   }
 
+  // Subscription cookies from env
+  if (env.AVAMOVIE_COOKIE) {
+    if (!base.providers.avamovie) base.providers.avamovie = {}
+    base.providers.avamovie.cookie = String(env.AVAMOVIE_COOKIE).trim()
+    base.providers.avamovie.enabled = true
+  }
+  if (env.DIGIMOVIE_COOKIE) {
+    if (!base.providers.digimovie) base.providers.digimovie = {}
+    base.providers.digimovie.cookie = String(env.DIGIMOVIE_COOKIE).trim()
+    base.providers.digimovie.enabled = true
+  }
+
   const merged = deepMerge(base, overlay || {})
   return applyMode(merged)
 }
 
+/**
+ * Decode base64url JSON from /c/:config/… paths.
+ * Allows providers.{avamovie,digimovie}.{cookie,enabled,baseUrl} for local debug.
+ */
 export function decodeUserConfig(encoded) {
   if (!encoded) return null
   try {
@@ -132,9 +149,40 @@ export function decodeUserConfig(encoded) {
     if (obj.timeouts?.providerMs) {
       out.timeouts = { providerMs: Number(obj.timeouts.providerMs) || 15_000 }
     }
+
+    // Per-provider overlay (cookie for subscription sites — debug / personal install)
+    if (obj.providers && typeof obj.providers === 'object') {
+      out.providers = {}
+      for (const [key, val] of Object.entries(obj.providers)) {
+        if (!val || typeof val !== 'object') continue
+        const safeKey = String(key).toLowerCase().replace(/[^a-z0-9]/g, '')
+        if (!safeKey) continue
+        const entry = {}
+        if (typeof val.baseUrl === 'string' && val.baseUrl.startsWith('http')) {
+          entry.baseUrl = val.baseUrl.replace(/\/+$/, '').slice(0, 200)
+        }
+        if (typeof val.cookie === 'string' && val.cookie.trim()) {
+          // hard cap to avoid huge tokens
+          entry.cookie = val.cookie.trim().slice(0, 4096)
+        }
+        if (typeof val.enabled === 'boolean') entry.enabled = val.enabled
+        if (Object.keys(entry).length) out.providers[safeKey] = entry
+      }
+      if (!Object.keys(out.providers).length) delete out.providers
+    }
+
     return Object.keys(out).length ? out : null
   } catch {
     return null
+  }
+}
+
+export function encodeUserConfig(obj) {
+  try {
+    const json = JSON.stringify(obj || {})
+    return Buffer.from(json, 'utf8').toString('base64url')
+  } catch {
+    return ''
   }
 }
 
@@ -157,7 +205,7 @@ export function isProviderEnabled(config, providerKey) {
   const p = config.providers[providerKey]
   if (p && p.enabled === false) return false
   if (!config.providersEnabled.length) {
-    return Boolean(p?.baseUrl || p?.enabled)
+    return Boolean(p?.baseUrl || p?.enabled || p?.cookie)
   }
   return config.providersEnabled.includes(providerKey)
 }
