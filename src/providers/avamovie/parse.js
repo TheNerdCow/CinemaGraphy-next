@@ -2,6 +2,8 @@
  * AvaMovie HTML parsers — item-movie cards, downloadbox / dl-item streams.
  */
 
+import { extractPosterFromCardHtml, normalizeAvaPosterUrl } from './poster.js'
+
 const AVA_HOSTS = new Set(['avadel.top', 'avamovie.shop', 'www.avamovie.shop'])
 
 /** Pure section roots (not detail pages). */
@@ -55,14 +57,12 @@ export function parseListingHtml(html, baseUrl, forceType) {
   const results = []
   const seen = new Set()
 
-  // Prefer the real listing region — avoids header/footer/menu pollution
   let scope = html
   const arch = html.match(
     /class="[^"]*archive-posts[^"]*"[\s\S]*?(?=<footer|class="[^"]*site-pagination|id="footer|$)/i,
   )
   if (arch) scope = arch[0]
 
-  // Cards: class="item-movie"
   const cardRe =
     /class="[^"]*item-movie[^"]*"[\s\S]*?(?=class="[^"]*item-movie|site-pagination|<\/main>|<footer|$)/gi
   let m
@@ -85,20 +85,12 @@ export function parseListingHtml(html, baseUrl, forceType) {
       cleanTitle(match1(block, /class=["']title["'][^>]*>([\s\S]*?)<\/div>/i) || '')
     if (!title || title.length < 2 || isNoiseTitle(title)) continue
 
-    // Prefer numeric year only — site puts "فصل ۰۳..." in .year for series
     const yearRaw = match1(block, /class=["']year["'][^>]*>([\s\S]*?)<\/div>/i) || ''
     const year =
       extractYear(yearRaw) || extractYear(titleAttr || '') || extractYear(title)
 
-    let poster = match1(block, /background-image:\s*url\(([^)]+)\)/i)
-    if (poster) {
-      poster = poster.replace(/^['"]|['"]$/g, '').trim()
-      poster = resolveUrl(base, poster) || poster
-    }
-    if (!poster) {
-      poster = match1(block, /<img[^>]+src=["']([^"']+)["']/i)
-      if (poster) poster = resolveUrl(base, poster) || poster
-    }
+    // Public CDN rewrite (Amazon) — same role as F2Media intocdn posters
+    const poster = extractPosterFromCardHtml(block, base)
 
     const type =
       forceType ||
@@ -116,7 +108,6 @@ export function parseListingHtml(html, baseUrl, forceType) {
     if (results.length >= 40) break
   }
 
-  // Strict fallback only inside archive scope — never whole-page menu links
   if (results.length < 4 && arch) {
     const linkRe =
       /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*title=["']([^"']+)["']/gi
@@ -160,7 +151,9 @@ export function parseDetailMeta(html, baseUrl) {
   let poster =
     match1(html, /property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
     match1(html, /"thumbnailUrl"\s*:\s*"(https?:[^"\\]+)"/i)
-  if (poster) poster = resolveUrl(base, poster) || poster
+  if (poster) {
+    poster = normalizeAvaPosterUrl(poster, base) || normalizeAvaPosterUrl(resolveUrl(base, poster), base)
+  }
   const type = /\/series\//i.test(
     match1(html, /property=["']og:url["'][^>]*content=["']([^"']+)["']/i) || '',
   )
@@ -415,14 +408,6 @@ function isNoiseTitle(title) {
   return false
 }
 
-/**
- * Noise = section index pages only.
- * Detail URLs look like:
- *   runner-2026
- *   series/the-apothecary-diaries
- * Section roots (must filter):
- *   series  anime  east-asian-series  movies
- */
 function isNoisePath(pagePath) {
   const segs = String(pagePath)
     .replace(/\/+$/, '')
@@ -430,20 +415,11 @@ function isNoisePath(pagePath) {
     .split('/')
     .filter(Boolean)
   if (!segs.length) return true
-
-  // /series/ or /anime/ alone
   if (segs.length === 1 && SECTION_ROOTS.has(segs[0])) return true
-
-  // /series/page/2
   if (segs.length >= 2 && SECTION_ROOTS.has(segs[0]) && segs[1] === 'page') return true
-
-  // /series/slug → valid detail
   if (segs[0] === 'series' && segs.length >= 2 && segs[1] !== 'page') return false
-
-  // Persian UI paths
   const joined = safeDecode(segs.join('/'))
   if (/خروج|تماس|قوانین|اپلیکیشن|ورود|اشتراک/.test(joined)) return true
-
   return false
 }
 
