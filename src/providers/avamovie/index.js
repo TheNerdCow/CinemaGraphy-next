@@ -7,6 +7,9 @@
  * Strategy: try preferred base first, but only accept HTML that looks like a
  * real listing/detail (has item-movie / downloadbox / title_en). Filtered or
  * soft-block pages are skipped and the next mirror is tried.
+ *
+ * Posters: prefer Cinemeta → images.metahub.space (no auth). Site CDN posters
+ * often need session cookies and fail inside Stremio/Nuvio image loaders.
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
@@ -93,11 +96,9 @@ export function createAvaMovieProvider(deps = {}) {
     const h = html
     if (kind === 'list' || kind === 'search') {
       if (/item-movie/i.test(h) || /class="[^"]*title_en[^"]*"/i.test(h)) return true
-      // search sometimes uses different card markup
       if (/archive-posts/i.test(h) && /title_en/i.test(h)) return true
       return false
     }
-    // detail
     if (/downloadbox|dl-item|link-main/i.test(h)) return true
     if (/yserver|\.mkv|\.mp4/i.test(h)) return true
     if (/og:title/i.test(h) && /avadel|avamovie/i.test(h)) return true
@@ -159,21 +160,40 @@ export function createAvaMovieProvider(deps = {}) {
 
   async function lookupImages(title, year, type) {
     if (!title) return {}
-    const key = `ava-meta:${type}:${title}:${year || ''}`
+    const clean = String(title)
+      .replace(/دانلود\s*(فیلم|سریال|انیمیشن|انیمه)?/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!clean) return {}
+
+    const key = `ava-meta:${type}:${clean.toLowerCase()}:${year || ''}`
     const hit = cache.get(key)
     if (hit !== undefined) return hit
     const out = {}
     try {
       const t = type === 'series' ? 'series' : 'movie'
-      const q = year ? `${title} ${year}` : title
-      const found = await withTimeout(cinemeta.search(q, t), 4500)
-      if (found?.imdb) {
-        out.poster = metahubPoster(found.imdb) || found.poster
-        out.background = metahubBackground(found.imdb) || found.background || out.poster
-        out.imdb = found.imdb
-        out.description = found.description
-        out.genres = found.genres
-        out.imdbRating = found.imdbRating
+      // Try with year, then without (Ava year field is often episode text)
+      const queries = year ? [`${clean} ${year}`, clean] : [clean]
+      for (const q of queries) {
+        const found = await withTimeout(cinemeta.search(q, t), 5000)
+        if (found?.imdb) {
+          out.poster = metahubPoster(found.imdb) || found.poster
+          out.background = metahubBackground(found.imdb) || found.background || out.poster
+          out.imdb = found.imdb
+          out.description = found.description
+          out.genres = found.genres
+          out.imdbRating = found.imdbRating
+          break
+        }
+      }
+      // series missed? try movie catalog (anime films)
+      if (!out.imdb && t === 'series') {
+        const found = await withTimeout(cinemeta.search(clean, 'movie'), 4000)
+        if (found?.imdb) {
+          out.poster = metahubPoster(found.imdb) || found.poster
+          out.background = metahubBackground(found.imdb) || found.background || out.poster
+          out.imdb = found.imdb
+        }
       }
     } catch {
       /* optional */
@@ -182,16 +202,25 @@ export function createAvaMovieProvider(deps = {}) {
     return out
   }
 
-  async function enrichMissing(items, limit = 12) {
-    const need = items.filter((i) => !i.poster).slice(0, limit)
+  /**
+   * Prefer public Metahub posters. Site CDN (avadel.top/cdn/...) often requires
+   * the same session cookie and fails in Stremio's image proxy.
+   */
+  async function enrichPosters(items, limit = 24) {
+    const batch = (items || []).slice(0, limit)
     await Promise.all(
-      need.map(async (it) => {
+      batch.map(async (it) => {
         try {
           const img = await lookupImages(it.title, it.year, it.type)
-          if (img.poster) it.poster = img.poster
+          if (img.poster) {
+            it.poster = img.poster
+            if (img.background) it.background = img.background
+          }
+          // keep site poster only if Cinemeta failed
           if (img.imdb) it.imdb = img.imdb
+          if (img.description) it.description = img.description
         } catch {
-          /* keep */
+          /* keep site poster if any */
         }
       }),
     )
@@ -247,7 +276,7 @@ export function createAvaMovieProvider(deps = {}) {
         const { html, base } = await fetchHtml(path, config, ctx.timeoutMs || 22_000, 'search')
         const parsed = parseSearchHtml(html, base)
         const items = mapItems(parsed)
-        await enrichMissing(items, 12)
+        await enrichPosters(items, 24)
         cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
         logger.info?.('avamovie search', { q, page, count: items.length, base })
         return items
@@ -275,18 +304,21 @@ export function createAvaMovieProvider(deps = {}) {
       const hit = cache.get(cacheKey)
       if (Array.isArray(hit) && hit.length) return hit
       try {
-        // build path relative to host so fetchHtml can swap mirrors
         const dummy = 'https://host.invalid'
         const full = genreListUrl(dummy, kind, genre, page)
         const path = full.replace(dummy, '')
         const { html, base } = await fetchHtml(path, config, ctx.timeoutMs || 22_000, 'list')
         const parsed = parseListingHtml(html, base, kind)
         const items = mapItems(parsed)
-        await enrichMissing(items, 12)
+        await enrichPosters(items, 24)
         cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
         return items
       } catch (err) {
-        logger.warn?.('avamovie genre failed', { message: err.message, genre, attempts: err.attempts })
+        logger.warn?.('avamovie genre failed', {
+          message: err.message,
+          genre,
+          attempts: err.attempts,
+        })
         return []
       }
     },
@@ -327,9 +359,17 @@ export function createAvaMovieProvider(deps = {}) {
         let parsed = parseListingHtml(html, base, type)
         parsed = parsed.map((it) => ({ ...it, type: type || it.type }))
         const items = mapItems(parsed)
-        await enrichMissing(items, 12)
+        await enrichPosters(items, 24)
         cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
-        logger.info?.('avamovie browse', { catalogId, page, url, base, count: items.length })
+        const withPoster = items.filter((i) => i.poster).length
+        logger.info?.('avamovie browse', {
+          catalogId,
+          page,
+          url,
+          base,
+          count: items.length,
+          withPoster,
+        })
         return items
       } catch (err) {
         logger.warn?.('avamovie browse failed', {
@@ -354,7 +394,12 @@ export function createAvaMovieProvider(deps = {}) {
       if (hit && (hit.streams?.length || hit.videos?.length)) return hit
 
       try {
-        const { html, base } = await fetchHtml(`/${pagePath}`, config, ctx.timeoutMs || 22_000, 'detail')
+        const { html, base } = await fetchHtml(
+          `/${pagePath}`,
+          config,
+          ctx.timeoutMs || 22_000,
+          'detail',
+        )
         const meta = parseDetailMeta(html, base)
         const streams = parseDetailStreams(html, base)
 
@@ -387,6 +432,7 @@ export function createAvaMovieProvider(deps = {}) {
         }
 
         const imdb = meta.imdb || img.imdb
+        // Prefer public metahub; site og:image may need auth
         const poster =
           (imdb && metahubPoster(imdb)) || img.poster || meta.poster || undefined
         const background =
@@ -419,6 +465,7 @@ export function createAvaMovieProvider(deps = {}) {
           type: detail.type,
           streams: streams.length,
           videos: videos.length,
+          hasPoster: Boolean(poster),
         })
         return detail
       } catch (err) {
@@ -480,6 +527,7 @@ function mapItems(parsed) {
     type: item.type,
     title: item.title,
     year: item.year,
+    // site poster kept as temporary fallback; enrichPosters may replace
     poster: item.poster || undefined,
     providerKey: 'avamovie',
     externalRefs: { pagePath: item.pagePath },
