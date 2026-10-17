@@ -21,7 +21,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.4.1'
+const VERSION = process.env.ADDON_VERSION || '0.4.2'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -52,6 +52,13 @@ function parseExtra(raw) {
   }
 }
 
+/** Nuvio/Stremio "All Genres" is not a real genre filter. */
+function isAllGenres(genre) {
+  const g = String(genre || '').trim().toLowerCase()
+  if (!g) return true
+  return /^(all(\s*genres)?|\u0647\u0645\u0647(\s*\u0698\u0627\u0646\u0631(\u0647\u0627)?)?|none|any)$/i.test(g)
+}
+
 function createApp() {
   const app = express()
   app.use(cors())
@@ -74,7 +81,7 @@ function createApp() {
 <title>CinemaGraphy Next</title>
 <style>body{font-family:system-ui;background:#0b0d12;color:#e8eaef;padding:2rem}
 a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radius:12px;padding:1.5rem;border:1px solid #243044}</style></head>
-<body><div class="card"><h1>سینماگرافی Next ${VERSION}</h1>
+<body><div class="card"><h1>\u0633\u06cc\u0646\u0645\u0627\u06af\u0631\u0627\u0641\u06cc Next ${VERSION}</h1>
 <p>F2Media + Cinamatic + AslMoviez</p>
 <ul><li><a href="/manifest.json">manifest</a></li><li><a href="/health">health</a></li>
 <li><a href="/debug/f2">debug f2</a></li></ul></div></body></html>`)
@@ -138,7 +145,8 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
         : '')
     const extra = parseExtra(extraRaw)
     const search = extra.search ? String(extra.search) : ''
-    const genre = extra.genre ? String(extra.genre) : ''
+    const genreRaw = extra.genre ? String(extra.genre) : ''
+    const genre = isAllGenres(genreRaw) ? '' : genreRaw
     const skip = extra.skip ? Number(extra.skip) : 0
 
     log.info('catalog request', {
@@ -146,6 +154,7 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
       id,
       search: search || undefined,
       genre: genre || undefined,
+      genreRaw: genreRaw || undefined,
       skip,
     })
 
@@ -174,6 +183,18 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
             skip,
             timeoutMs: 18_000,
           })
+        }
+        // Fallback: F2 editorial updated rail if type listing empty
+        if (
+          !items.length &&
+          !search &&
+          !genre &&
+          providerKey === 'f2media' &&
+          provider.browse
+        ) {
+          const fallbackId =
+            wantType === 'series' ? 'f2media_series_updated' : 'f2media_movies_updated'
+          items = await provider.browse(fallbackId, { config, skip, timeoutMs: 18_000 })
         }
         res.json({ metas: toMetas(items, providerKey, wantType) })
       } catch (err) {
