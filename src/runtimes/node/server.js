@@ -13,6 +13,7 @@ import { stubExampleProvider } from '../../providers/stub-example.js'
 import { createF2MediaProvider } from '../../providers/f2media/index.js'
 import { createCinamaticProvider } from '../../providers/cinamatic/index.js'
 import { createAslMoviezProvider } from '../../providers/aslmoviez/index.js'
+import { createAvaMovieProvider } from '../../providers/avamovie/index.js'
 import { fromStremioProviderId, toStremioProviderId } from '../../core/ids/namespace.js'
 import { createHttpClient } from '../../core/http/client.js'
 import { parseListingHtml } from '../../providers/f2media/parse-listing.js'
@@ -21,12 +22,13 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.4.3'
+const VERSION = process.env.ADDON_VERSION || '0.4.4'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
 registerProvider(createCinamaticProvider({ logger: log }))
 registerProvider(createAslMoviezProvider({ logger: log }))
+registerProvider(createAvaMovieProvider({ logger: log }))
 
 function resolveConfig(req) {
   const server = configFromEnv(process.env)
@@ -82,7 +84,7 @@ function createApp() {
 <style>body{font-family:system-ui;background:#0b0d12;color:#e8eaef;padding:2rem}
 a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radius:12px;padding:1.5rem;border:1px solid #243044}</style></head>
 <body><div class="card"><h1>\u0633\u06cc\u0646\u0645\u0627\u06af\u0631\u0627\u0641\u06cc Next ${VERSION}</h1>
-<p>F2Media + Cinamatic + AslMoviez</p>
+<p>F2Media + Cinamatic + AslMoviez + AvaMovie(cookie)</p>
 <ul><li><a href="/manifest.json">manifest</a></li><li><a href="/health">health</a></li>
 <li><a href="/debug/f2">debug f2</a></li></ul></div></body></html>`)
   })
@@ -94,6 +96,7 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
       service: 'cinemagraphy-next',
       version: VERSION,
       providers: listEnabledProviders(config).map((p) => p.key),
+      avamovieCookie: Boolean(process.env.AVAMOVIE_COOKIE),
       time: new Date().toISOString(),
     })
   })
@@ -206,13 +209,16 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
     if (
       id.startsWith('f2media_') ||
       id.startsWith('cinamatic_') ||
-      id.startsWith('aslmoviez_')
+      id.startsWith('aslmoviez_') ||
+      id.startsWith('avamovie_')
     ) {
       const providerKey = id.startsWith('cinamatic_')
         ? 'cinamatic'
         : id.startsWith('aslmoviez_')
           ? 'aslmoviez'
-          : 'f2media'
+          : id.startsWith('avamovie_')
+            ? 'avamovie'
+            : 'f2media'
       const provider = getProvider(providerKey)
       if (!provider || !provider.isEnabled(config) || config.mode === 'streams') {
         res.json({ metas: [] })
