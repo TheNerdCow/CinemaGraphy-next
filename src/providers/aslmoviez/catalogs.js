@@ -25,47 +25,44 @@ export const ASL_CATALOGS = [
     nameFa: 'AslMoviez — انیمه',
     path: '/genre/anime',
   },
-  {
-    id: 'aslmoviez_doc',
-    type: 'movie',
-    kind: 'doc',
-    nameFa: 'AslMoviez — مستند',
-    path: '/%d9%85%d8%b3%d8%aa%d9%86%d8%af',
-  },
 ]
 
-/** Genre labels used on /film and /series filters (Discover extra). */
+/** ژانرهای منوی فیلم روی سایت (دسته بندی‌ها → فیلم). */
 export const ASL_MOVIE_GENRES = [
-  'درام',
   'اکشن',
-  'کمدی',
-  'ماجراجویی',
-  'هیجان انگیز',
-  'جنایی',
-  'فانتزی',
   'ترسناک',
-  'علمی تخیلی',
-  'عاشقانه',
-  'خانوادگی',
-  'جنگی',
-  'زندگی‌نامه',
+  'فانتزی',
+  'درام',
+  'وسترن',
+  'کمدی',
+  'هیجان انگیز',
   'معمایی',
-  'تاریخی',
+  'خانوادگی',
+  'مستند',
+  'انیمیشن',
+  'ماجراجویی',
+  'جنایی',
+  'ورزشی',
+  'علمی تخیلی',
 ]
 
+/** ژانرهای منوی سریال روی سایت (دسته بندی‌ها → سریال). */
 export const ASL_SERIES_GENRES = [
-  'درام',
   'اکشن',
-  'کمدی',
-  'ماجراجویی',
   'هیجان انگیز',
   'جنایی',
-  'فانتزی',
-  'ترسناک',
-  'انیمه',
-  'تاریخی',
-  'بیوگرافی',
+  'عاشقانه',
   'معمایی',
+  'کمدی',
+  'تاریخی',
+  'خانوادگی',
+  'ماجراجویی',
+  'ورزشی',
+  'انیمیشن',
+  'ترسناک',
+  'درام',
+  'علمی تخیلی',
+  'مستند',
 ]
 
 export function getCatalogById(id) {
@@ -73,15 +70,24 @@ export function getCatalogById(id) {
 }
 
 export function toManifestCatalogs() {
-  return ASL_CATALOGS.map((c) => ({
-    id: c.id,
-    type: c.type,
-    name: c.nameFa,
-    extra: [
+  return ASL_CATALOGS.map((c) => {
+    const extra = [
       { name: 'search', isRequired: false },
       { name: 'skip', isRequired: false },
-    ],
-  }))
+    ]
+    // Genre dropdown only on film / series (not the dedicated anime rail)
+    if (c.kind === 'film') {
+      extra.unshift({ name: 'genre', options: ASL_MOVIE_GENRES, isRequired: false })
+    } else if (c.kind === 'series') {
+      extra.unshift({ name: 'genre', options: ASL_SERIES_GENRES, isRequired: false })
+    }
+    return {
+      id: c.id,
+      type: c.type,
+      name: c.nameFa,
+      extra,
+    }
+  })
 }
 
 /** Build list URL: /film, /film/page/2, /genre/anime/page/2 */

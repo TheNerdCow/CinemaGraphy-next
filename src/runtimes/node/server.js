@@ -21,7 +21,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.4.0'
+const VERSION = process.env.ADDON_VERSION || '0.4.1'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -202,6 +202,13 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
         let items = []
         if (search && provider.search) {
           items = await provider.search(search, { config, skip, timeoutMs: 18_000 })
+        } else if (genre && provider.browseGenre) {
+          const wantType = type === 'series' ? 'series' : 'movie'
+          items = await provider.browseGenre(wantType, genre, {
+            config,
+            skip,
+            timeoutMs: 18_000,
+          })
         } else if (provider.browse) {
           items = await provider.browse(id, { config, skip, timeoutMs: 18_000 })
         }
