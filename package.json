@@ -1,13 +1,13 @@
 {
   "name": "cinemagraphy-next",
-  "version": "0.3.1",
+  "version": "0.4.8",
   "private": true,
   "type": "module",
   "description": "Independent modular CinemaGraphy rewrite (Stremio). Clean-room — not a fork of production.",
   "engines": { "node": ">=20" },
   "scripts": {
-    "start": "node src/runtimes/node/server.js",
-    "dev": "node --watch src/runtimes/node/server.js",
+    "start": "node --dns-result-order=ipv4first src/runtimes/node/server.js",
+    "dev": "node --dns-result-order=ipv4first --watch src/runtimes/node/server.js",
     "test": "node --test tests/unit/*.test.js tests/providers/*.test.js",
     "check": "node --check src/runtimes/node/server.js"
   },
