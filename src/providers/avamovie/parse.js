@@ -4,6 +4,49 @@
 
 const AVA_HOSTS = new Set(['avadel.top', 'avamovie.shop', 'www.avamovie.shop'])
 
+/** Pure section roots (not detail pages). */
+const SECTION_ROOTS = new Set([
+  'movies',
+  'series',
+  'genre',
+  'category',
+  'tag',
+  'person',
+  'peoples',
+  'account',
+  'login',
+  'logout',
+  'buy-subscription',
+  'streams',
+  'anime',
+  'animation',
+  'doc',
+  'oscar',
+  'boxoffice',
+  'collections',
+  'list',
+  'country',
+  'movie-dub',
+  'series-dub',
+  '250movie',
+  '250series',
+  'east-asian-series',
+  'series-status',
+  'wp-admin',
+  'wp-content',
+  'page',
+  'contact',
+  'dmca',
+  'rules',
+  'application',
+  'app',
+  'terms',
+  'privacy',
+  'register',
+  'cart',
+  'checkout',
+])
+
 const NOISE_TITLES =
   /^(خروج|تماس\s*با\s*ما|قوانین|اپلیکیشن|ورود|ثبت\s*نام|خرید\s*اشتراک|حساب\s*کاربری|DMCA|Contact|Login|Logout|Home|خانه|جستجو|Search)$/i
 
@@ -42,10 +85,10 @@ export function parseListingHtml(html, baseUrl, forceType) {
       cleanTitle(match1(block, /class=["']title["'][^>]*>([\s\S]*?)<\/div>/i) || '')
     if (!title || title.length < 2 || isNoiseTitle(title)) continue
 
+    // Prefer numeric year only — site puts "فصل ۰۳..." in .year for series
+    const yearRaw = match1(block, /class=["']year["'][^>]*>([\s\S]*?)<\/div>/i) || ''
     const year =
-      extractYear(match1(block, /class=["']year["'][^>]*>([\s\S]*?)<\/div>/i) || '') ||
-      extractYear(titleAttr || '') ||
-      extractYear(title)
+      extractYear(yearRaw) || extractYear(titleAttr || '') || extractYear(title)
 
     let poster = match1(block, /background-image:\s*url\(([^)]+)\)/i)
     if (poster) {
@@ -59,7 +102,7 @@ export function parseListingHtml(html, baseUrl, forceType) {
 
     const type =
       forceType ||
-      (/\/series\//i.test(pagePath) || /\banime\b/i.test(pagePath) ? 'series' : 'movie')
+      (/^series\//i.test(pagePath) || /\banime\b/i.test(pagePath) ? 'series' : 'movie')
 
     seen.add(pagePath)
     results.push({
@@ -86,14 +129,13 @@ export function parseListingHtml(html, baseUrl, forceType) {
       if (!isLikelyDetailPath(pagePath)) continue
       const title = cleanTitle(lm[2])
       if (!title || title.length < 2 || isNoiseTitle(title)) continue
-      // Require year-like or long slug — reject bare UI labels
       if (!/[a-z0-9\-]{4,}/i.test(pagePath.split('/').pop() || '')) continue
       seen.add(pagePath)
       results.push({
         itemId: encodePageId(pagePath),
         title,
         year: extractYear(title) || undefined,
-        type: forceType || (/\/series\//i.test(pagePath) ? 'series' : 'movie'),
+        type: forceType || (/^series\//i.test(pagePath) ? 'series' : 'movie'),
         pagePath,
       })
       if (results.length >= 40) break
@@ -369,26 +411,39 @@ function isNoiseTitle(title) {
   if (!t) return true
   if (NOISE_TITLES.test(t)) return true
   if (t.length <= 2) return true
-  // pure UI words
   if (/^(contact|dmca|rules|app|application|about|faq)$/i.test(t)) return true
   return false
 }
 
+/**
+ * Noise = section index pages only.
+ * Detail URLs look like:
+ *   runner-2026
+ *   series/the-apothecary-diaries
+ * Section roots (must filter):
+ *   series  anime  east-asian-series  movies
+ */
 function isNoisePath(pagePath) {
-  const p = String(pagePath).replace(/\/+$/, '').toLowerCase()
-  const first = p.split('/')[0]
-  // static / account / legal pages that appeared as "catalog" junk
-  if (
-    /^(movies|series|genre|category|tag|person|peoples|account|login|logout|buy-subscription|streams|anime|animation|doc|oscar|boxoffice|collections|list|country|movie-dub|series-dub|250movie|250series|east-asian-series|series-status|wp-admin|wp-content|page|contact|dmca|rules|application|app|terms|privacy|register|cart|checkout)$/i.test(
-      first,
-    )
-  ) {
-    return true
-  }
-  // Persian slug noise
-  if (/خروج|تماس|قوانین|اپلیکیشن|ورود|اشتراک/.test(decodeURIComponent(safeDecode(p)))) {
-    return true
-  }
+  const segs = String(pagePath)
+    .replace(/\/+$/, '')
+    .toLowerCase()
+    .split('/')
+    .filter(Boolean)
+  if (!segs.length) return true
+
+  // /series/ or /anime/ alone
+  if (segs.length === 1 && SECTION_ROOTS.has(segs[0])) return true
+
+  // /series/page/2
+  if (segs.length >= 2 && SECTION_ROOTS.has(segs[0]) && segs[1] === 'page') return true
+
+  // /series/slug → valid detail
+  if (segs[0] === 'series' && segs.length >= 2 && segs[1] !== 'page') return false
+
+  // Persian UI paths
+  const joined = safeDecode(segs.join('/'))
+  if (/خروج|تماس|قوانین|اپلیکیشن|ورود|اشتراک/.test(joined)) return true
+
   return false
 }
 
@@ -402,8 +457,10 @@ function safeDecode(s) {
 
 function isLikelyDetailPath(pagePath) {
   const segs = String(pagePath).split('/').filter(Boolean)
-  if (segs.length === 1 && segs[0].length > 3 && !isNoisePath(pagePath)) return true
-  if (segs[0] === 'series' && segs.length >= 2) return true
+  if (segs.length === 1 && segs[0].length > 3 && !SECTION_ROOTS.has(segs[0].toLowerCase())) {
+    return true
+  }
+  if (segs[0] === 'series' && segs.length >= 2 && segs[1] !== 'page') return true
   return false
 }
 
