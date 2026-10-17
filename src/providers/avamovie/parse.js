@@ -4,16 +4,26 @@
 
 const AVA_HOSTS = new Set(['avadel.top', 'avamovie.shop', 'www.avamovie.shop'])
 
+const NOISE_TITLES =
+  /^(خروج|تماس\s*با\s*ما|قوانین|اپلیکیشن|ورود|ثبت\s*نام|خرید\s*اشتراک|حساب\s*کاربری|DMCA|Contact|Login|Logout|Home|خانه|جستجو|Search)$/i
+
 export function parseListingHtml(html, baseUrl, forceType) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const results = []
   const seen = new Set()
 
+  // Prefer the real listing region — avoids header/footer/menu pollution
+  let scope = html
+  const arch = html.match(
+    /class="[^"]*archive-posts[^"]*"[\s\S]*?(?=<footer|class="[^"]*site-pagination|id="footer|$)/i,
+  )
+  if (arch) scope = arch[0]
+
   // Cards: class="item-movie"
   const cardRe =
     /class="[^"]*item-movie[^"]*"[\s\S]*?(?=class="[^"]*item-movie|site-pagination|<\/main>|<footer|$)/gi
   let m
-  while ((m = cardRe.exec(html)) !== null) {
+  while ((m = cardRe.exec(scope)) !== null) {
     const block = m[0]
     const href =
       match1(block, /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["']/i) ||
@@ -30,7 +40,7 @@ export function parseListingHtml(html, baseUrl, forceType) {
       cleanTitle(titleEn || '') ||
       cleanTitle(titleAttr || '') ||
       cleanTitle(match1(block, /class=["']title["'][^>]*>([\s\S]*?)<\/div>/i) || '')
-    if (!title || title.length < 2) continue
+    if (!title || title.length < 2 || isNoiseTitle(title)) continue
 
     const year =
       extractYear(match1(block, /class=["']year["'][^>]*>([\s\S]*?)<\/div>/i) || '') ||
@@ -63,19 +73,21 @@ export function parseListingHtml(html, baseUrl, forceType) {
     if (results.length >= 40) break
   }
 
-  // Fallback: titled detail links
-  if (results.length < 4) {
+  // Strict fallback only inside archive scope — never whole-page menu links
+  if (results.length < 4 && arch) {
     const linkRe =
       /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*title=["']([^"']+)["']/gi
     let lm
-    while ((lm = linkRe.exec(html)) !== null) {
+    while ((lm = linkRe.exec(scope)) !== null) {
       const abs = resolveUrl(base, lm[1])
       if (!abs || !sameSite(abs, base)) continue
       const pagePath = pathFromUrl(abs, base)
       if (!pagePath || seen.has(pagePath) || isNoisePath(pagePath)) continue
       if (!isLikelyDetailPath(pagePath)) continue
       const title = cleanTitle(lm[2])
-      if (!title || title.length < 2) continue
+      if (!title || title.length < 2 || isNoiseTitle(title)) continue
+      // Require year-like or long slug — reject bare UI labels
+      if (!/[a-z0-9\-]{4,}/i.test(pagePath.split('/').pop() || '')) continue
       seen.add(pagePath)
       results.push({
         itemId: encodePageId(pagePath),
@@ -123,11 +135,6 @@ export function parseDetailMeta(html, baseUrl) {
   }
 }
 
-/**
- * Collect playable streams from downloadbox.
- * Movies: link-main to .mkv
- * Series: per-season dl-item, episode links with SxxExx in URL
- */
 export function parseDetailStreams(html, baseUrl) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const out = []
@@ -357,19 +364,47 @@ function isPlayableUrl(href) {
   }
 }
 
+function isNoiseTitle(title) {
+  const t = String(title || '').trim()
+  if (!t) return true
+  if (NOISE_TITLES.test(t)) return true
+  if (t.length <= 2) return true
+  // pure UI words
+  if (/^(contact|dmca|rules|app|application|about|faq)$/i.test(t)) return true
+  return false
+}
+
 function isNoisePath(pagePath) {
   const p = String(pagePath).replace(/\/+$/, '').toLowerCase()
   const first = p.split('/')[0]
-  return /^(movies|series|genre|category|tag|person|peoples|account|login|buy-subscription|streams|anime|animation|doc|oscar|boxoffice|collections|list|country|movie-dub|series-dub|250movie|250series|east-asian-series|series-status|wp-admin|wp-content|page)$/i.test(
-    first,
-  )
+  // static / account / legal pages that appeared as "catalog" junk
+  if (
+    /^(movies|series|genre|category|tag|person|peoples|account|login|logout|buy-subscription|streams|anime|animation|doc|oscar|boxoffice|collections|list|country|movie-dub|series-dub|250movie|250series|east-asian-series|series-status|wp-admin|wp-content|page|contact|dmca|rules|application|app|terms|privacy|register|cart|checkout)$/i.test(
+      first,
+    )
+  ) {
+    return true
+  }
+  // Persian slug noise
+  if (/خروج|تماس|قوانین|اپلیکیشن|ورود|اشتراک/.test(decodeURIComponent(safeDecode(p)))) {
+    return true
+  }
+  return false
+}
+
+function safeDecode(s) {
+  try {
+    return decodeURIComponent(s)
+  } catch {
+    return s
+  }
 }
 
 function isLikelyDetailPath(pagePath) {
   const segs = String(pagePath).split('/').filter(Boolean)
-  if (segs.length === 1 && segs[0].length > 3) return true
+  if (segs.length === 1 && segs[0].length > 3 && !isNoisePath(pagePath)) return true
   if (segs[0] === 'series' && segs.length >= 2) return true
-  return segs.length >= 1 && !isNoisePath(pagePath)
+  return false
 }
 
 function persianSeason(text) {
@@ -398,9 +433,7 @@ function sameSite(a, b) {
     const ha = new URL(a).hostname.replace(/^www\./i, '').toLowerCase()
     const hb = new URL(b).hostname.replace(/^www\./i, '').toLowerCase()
     if (ha === hb) return true
-    // sibling AvaMovie hosts share the same content paths
     if (AVA_HOSTS.has(ha) && AVA_HOSTS.has(hb)) return true
-    if (AVA_HOSTS.has(ha) && !hb) return true
     return false
   } catch {
     return false
