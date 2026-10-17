@@ -20,7 +20,8 @@ import { createAslMoviezProvider } from '../../providers/aslmoviez/index.js'
 import { createAvaMovieProvider } from '../../providers/avamovie/index.js'
 import { fromStremioProviderId, toStremioProviderId } from '../../core/ids/namespace.js'
 import { createHttpClient } from '../../core/http/client.js'
-import { parseListingHtml } from '../../providers/f2media/parse-listing.js'
+import { parseListingHtml as parseF2Listing } from '../../providers/f2media/parse-listing.js'
+import { parseListingHtml as parseAvaListing } from '../../providers/avamovie/parse.js'
 import {
   setSessionCookie,
   getSessionCookie,
@@ -31,7 +32,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.4.6'
+const VERSION = process.env.ADDON_VERSION || '0.4.7'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -59,7 +60,6 @@ function resolveConfig(req) {
     })
   }
 
-  // Inject debug session cookie (landing form) without changing install URL
   const sessionAva = getSessionCookie('avamovie')
   if (sessionAva) {
     cfg = {
@@ -133,7 +133,7 @@ code{background:#1a2230;padding:.1rem .35rem;border-radius:4px;font-size:.82rem}
 
   <div class="card">
     <h2>نصب افزونه</h2>
-    <p class="sub" style="margin:0">لینک نصب ثابت است. کوکی آوا فقط روی سرور ذخیره می‌شود و URL را عوض نمی‌کند.</p>
+    <p class="sub" style="margin:0">لینک نصب ثابت است. کوکی آوا فقط روی سرور ذخیره می‌شود.</p>
     <div class="install" id="installUrl"></div>
     <div class="row">
       <a class="btn primary" id="btnInstall" href="/manifest.json">باز کردن manifest</a>
@@ -141,8 +141,7 @@ code{background:#1a2230;padding:.1rem .35rem;border-radius:4px;font-size:.82rem}
     </div>
     <ul>
       <li><a href="/health">/health</a></li>
-      <li><a href="/debug/f2">/debug/f2</a></li>
-      <li><a href="/debug/avamovie">/debug/avamovie</a></li>
+      <li><a href="/debug/avamovie">/debug/avamovie</a> (جزئیات خام)</li>
       <li><a href="/catalog/movie/avamovie_movies.json">کاتالوگ فیلم آوا</a></li>
     </ul>
   </div>
@@ -150,10 +149,10 @@ code{background:#1a2230;padding:.1rem .35rem;border-radius:4px;font-size:.82rem}
   <div class="card">
     <h2>کوکی آوا مووی <span class="badge ${hasAva ? 'on' : 'off'}">${hasAva ? 'فعال' : 'غیرفعال'}</span></h2>
     ${flashHtml}
-    <p class="sub" style="margin-top:0">از مرورگر لاگین‌شده در <code>avadel.top</code> مقدار Cookie را کپی کن و ذخیره بزن.</p>
+    <p class="sub" style="margin-top:0">از مرورگر لاگین‌شده در <code>avadel.top</code> مقدار Cookie را کپی کن.</p>
     <form method="POST" action="/api/avamovie-cookie" id="avaForm">
       <label for="cookie">Cookie</label>
-      <textarea id="cookie" name="cookie" placeholder="wordpress_logged_in_...=...; ..." required></textarea>
+      <textarea id="cookie" name="cookie" placeholder="PHPSESSID=...; wordpress_logged_in_...=..." required></textarea>
       <div class="row">
         <button type="submit" class="primary" name="action" value="save">ذخیره کوکی</button>
         <button type="submit" class="ghost" name="action" value="clear" formnovalidate>پاک کردن</button>
@@ -214,7 +213,6 @@ function createApp() {
     res.type('html').send(landingHtml())
   })
 
-  // Form POST — no fragile client JS for cookie
   app.post('/api/avamovie-cookie', async (req, res) => {
     const action = String(req.body?.action || 'save')
     const cookie = String(req.body?.cookie || '')
@@ -243,7 +241,7 @@ function createApp() {
         const items = await provider.browse('avamovie_movies', {
           config,
           skip: 0,
-          timeoutMs: 20_000,
+          timeoutMs: 25_000,
         })
         const n = items?.length || 0
         res.type('html').send(
@@ -252,7 +250,7 @@ function createApp() {
             msg:
               n > 0
                 ? `کوکی ذخیره شد — ${n} آیتم در کاتالوگ فیلم`
-                : 'کوکی ذخیره شد ولی کاتالوگ خالی است (کوکی/دامنه را چک کن)',
+                : 'کوکی ذخیره شد ولی کاتالوگ خالی است — /debug/avamovie را ببین',
           }),
         )
       } catch (err) {
@@ -263,17 +261,14 @@ function createApp() {
       return
     }
 
-    res
-      .type('html')
-      .send(
-        landingHtml({
-          ok: true,
-          msg: `کوکی ذخیره شد (${saved.len} کاراکتر). لینک نصب همان /manifest.json است.`,
-        }),
-      )
+    res.type('html').send(
+      landingHtml({
+        ok: true,
+        msg: `کوکی ذخیره شد (${saved.len} کاراکتر).`,
+      }),
+    )
   })
 
-  // JSON API (optional for tools)
   app.post('/api/avamovie-cookie.json', (req, res) => {
     const action = String(req.body?.action || 'save')
     if (action === 'clear') {
@@ -281,8 +276,7 @@ function createApp() {
       return res.json({ ok: true, cleared: true })
     }
     const cookie = String(req.body?.cookie || '')
-    const saved = setSessionCookie('avamovie', cookie)
-    res.json(saved)
+    res.json(setSessionCookie('avamovie', cookie))
   })
 
   app.get('/health', (req, res) => {
@@ -295,6 +289,8 @@ function createApp() {
       providers: listEnabledProviders(config).map((p) => p.key),
       avamovieCookie: Boolean(ava?.cookie),
       avamovieSession: hasSessionCookie('avamovie'),
+      avamovieBase:
+        ava?.baseUrl || process.env.AVAMOVIE_BASEURL || 'https://avadel.top',
       time: new Date().toISOString(),
     })
   })
@@ -307,7 +303,7 @@ function createApp() {
     try {
       const r = await http.get(url)
       const text = r.ok ? await r.text() : ''
-      const parsed = text ? parseListingHtml(text, base) : []
+      const parsed = text ? parseF2Listing(text, base) : []
       res.json({
         ok: r.ok,
         status: r.status,
@@ -323,14 +319,17 @@ function createApp() {
     }
   })
 
+  /** Deep raw diagnostics — shows what each host returns */
   async function debugAva(req, res) {
     const config = resolveConfig(req)
     const provider = getProvider('avamovie')
-    const cookie = config.providers?.avamovie?.cookie || ''
-    const base =
+    const cookie =
+      config.providers?.avamovie?.cookie || process.env.AVAMOVIE_COOKIE || ''
+    const preferred =
       config.providers?.avamovie?.baseUrl ||
       process.env.AVAMOVIE_BASEURL ||
       'https://avadel.top'
+
     if (!cookie) {
       res.json({
         ok: false,
@@ -339,30 +338,102 @@ function createApp() {
       })
       return
     }
+
+    const hosts = [
+      preferred.replace(/\/+$/, ''),
+      'https://avadel.top',
+      'https://avamovie.shop',
+    ].filter((v, i, a) => a.indexOf(v) === i)
+
+    const probes = []
+    for (const base of hosts) {
+      const url = `${base}/movies/`
+      const started = Date.now()
+      try {
+        const ac = new AbortController()
+        const t = setTimeout(() => ac.abort(), 25_000)
+        const r = await fetch(url, {
+          method: 'GET',
+          redirect: 'follow',
+          signal: ac.signal,
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'fa-IR,fa;q=0.9,en;q=0.8',
+            Cookie: cookie,
+            Referer: `${base}/`,
+          },
+        })
+        clearTimeout(t)
+        const html = await r.text()
+        const itemMovie = (html.match(/item-movie/gi) || []).length
+        const titleEn = (html.match(/title_en/gi) || []).length
+        const parsed = itemMovie ? parseAvaListing(html, base, 'movie') : []
+        probes.push({
+          base,
+          url,
+          finalUrl: r.url,
+          status: r.status,
+          ms: Date.now() - started,
+          htmlLen: html.length,
+          itemMovie,
+          titleEn,
+          hasLoginForm: /name=["']log|login-form|ورود به حساب/i.test(html),
+          hasBuySub: /buy-subscription|خرید اشتراک/i.test(html),
+          parsed: parsed.length,
+          sampleTitles: parsed.slice(0, 5).map((p) => p.title),
+          titleSnippet: (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1]
+            ?.replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 80),
+        })
+      } catch (err) {
+        probes.push({
+          base,
+          url,
+          ms: Date.now() - started,
+          error: err.name === 'AbortError' ? 'timeout' : err.message,
+        })
+      }
+    }
+
+    let providerCount = 0
+    let providerSample = []
+    let providerError = null
     try {
       const items = await provider.browse('avamovie_movies', {
         config,
         skip: 0,
-        timeoutMs: 20_000,
+        timeoutMs: 25_000,
       })
-      res.json({
-        ok: true,
-        base,
-        cookiePresent: true,
-        cookieLen: String(cookie).length,
-        count: items.length,
-        sample: items.slice(0, 6).map((i) => ({
-          title: i.title,
-          type: i.type,
-          year: i.year,
-          hasPoster: Boolean(i.poster),
-        })),
-        enabled: provider.isEnabled(config),
-        version: VERSION,
-      })
+      providerCount = items.length
+      providerSample = items.slice(0, 5).map((i) => ({
+        title: i.title,
+        year: i.year,
+        hasPoster: Boolean(i.poster),
+      }))
     } catch (err) {
-      res.status(500).json({ ok: false, error: err.message, version: VERSION })
+      providerError = err.message
     }
+
+    const best = probes.find((p) => p.parsed > 0) || probes[0]
+    res.json({
+      ok: providerCount > 0 || Boolean(best?.parsed),
+      version: VERSION,
+      cookiePresent: true,
+      cookieLen: cookie.length,
+      preferredBase: preferred,
+      enabled: provider.isEnabled(config),
+      providerBrowseCount: providerCount,
+      providerSample,
+      providerError,
+      probes,
+      hint:
+        providerCount === 0
+          ? 'اگر همه probes.error دارند → شبکه/فیلتر. اگر itemMovie=0 و hasLoginForm → کوکی نامعتبر. اگر itemMovie>0 و parsed=0 → باگ پارسر.'
+          : 'OK',
+    })
   }
 
   app.get('/debug/avamovie', debugAva)
@@ -388,7 +459,13 @@ function createApp() {
     const genre = isAllGenres(genreRaw) ? '' : genreRaw
     const skip = extra.skip ? Number(extra.skip) : 0
 
-    log.info('catalog request', { type, id, search: search || undefined, genre: genre || undefined, skip })
+    log.info('catalog request', {
+      type,
+      id,
+      search: search || undefined,
+      genre: genre || undefined,
+      skip,
+    })
 
     const typeCatalog = id.match(/^([a-z0-9]+)_(movies|series)$/i)
     if (typeCatalog) {
@@ -404,11 +481,25 @@ function createApp() {
         if (search && provider.search) {
           items = await provider.search(search, { config, skip, timeoutMs: 18_000 })
         } else if (genre && provider.browseGenre) {
-          items = await provider.browseGenre(wantType, genre, { config, skip, timeoutMs: 18_000 })
+          items = await provider.browseGenre(wantType, genre, {
+            config,
+            skip,
+            timeoutMs: 18_000,
+          })
         } else if (provider.browseType) {
-          items = await provider.browseType(wantType, { config, skip, timeoutMs: 18_000 })
+          items = await provider.browseType(wantType, {
+            config,
+            skip,
+            timeoutMs: 18_000,
+          })
         }
-        if (!items.length && !search && !genre && providerKey === 'f2media' && provider.browse) {
+        if (
+          !items.length &&
+          !search &&
+          !genre &&
+          providerKey === 'f2media' &&
+          provider.browse
+        ) {
           const fallbackId =
             wantType === 'series' ? 'f2media_series_updated' : 'f2media_movies_updated'
           items = await provider.browse(fallbackId, { config, skip, timeoutMs: 18_000 })
@@ -442,12 +533,16 @@ function createApp() {
       try {
         let items = []
         if (search && provider.search) {
-          items = await provider.search(search, { config, skip, timeoutMs: 18_000 })
+          items = await provider.search(search, { config, skip, timeoutMs: 22_000 })
         } else if (genre && provider.browseGenre) {
           const wantType = type === 'series' ? 'series' : 'movie'
-          items = await provider.browseGenre(wantType, genre, { config, skip, timeoutMs: 18_000 })
+          items = await provider.browseGenre(wantType, genre, {
+            config,
+            skip,
+            timeoutMs: 22_000,
+          })
         } else if (provider.browse) {
-          items = await provider.browse(id, { config, skip, timeoutMs: 18_000 })
+          items = await provider.browse(id, { config, skip, timeoutMs: 22_000 })
         }
         res.json({ metas: toMetas(items, providerKey, type) })
       } catch (err) {
