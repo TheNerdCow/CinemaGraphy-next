@@ -1,6 +1,6 @@
 /**
  * Cinamatic provider (cinamatic.top) — independent of F2Media.
- * Catalogs: film / series / anime only (no duplicate generic film catalog).
+ * Page-by-page browse via /category/.../page/N/ (WP page size ≈ 10).
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
@@ -19,13 +19,13 @@ import {
   buildSeriesVideos,
   decodePageId,
 } from './parse.js'
-import { getCatalogById, toManifestCatalogs } from './catalogs.js'
+import { getCatalogById, toManifestCatalogs, catalogListUrl } from './catalogs.js'
 
 const DEFAULT_BASE = 'https://cinamatic.top'
-const PAGE_SIZE = 16
-const SEARCH_MAX_PAGES = 3
+/** Must match WordPress posts-per-page so skip advances to the next site page. */
+const PAGE_SIZE = 10
 const CACHE_LIST_MS = 8 * 60_000
-const CACHE_EMPTY_MS = 25_000
+const CACHE_EMPTY_MS = 20_000
 const CACHE_DETAIL_MS = 10 * 60_000
 const CACHE_META_MS = 30 * 60_000
 
@@ -61,7 +61,7 @@ export function createCinamaticProvider(deps = {}) {
     return out
   }
 
-  async function enrichMissing(items, limit = 14) {
+  async function enrichMissing(items, limit = 12) {
     const need = items.filter((i) => !i.poster).slice(0, limit)
     await Promise.all(
       need.map(async (it) => {
@@ -105,64 +105,54 @@ export function createCinamaticProvider(deps = {}) {
     },
 
     /**
-     * Multi-page search: page 1..SEARCH_MAX_PAGES merged, then skip slice.
-     * WP search URLs: /page/N/?s=query  or  /?s=query&paged=N
+     * Search page-by-page (not capped at 3 pages).
+     * /?s=q  then  /page/N/?s=q
      */
     async search(query, ctx = {}) {
       const q = String(query || '').trim()
       if (!q) return []
       const base = this.baseUrl(ctx.config || {})
       const skip = Number(ctx.skip) || 0
-      const cacheKey = `cina-search:${base}:${q.toLowerCase()}`
-      let all = cache.get(cacheKey)
+      const page = Math.floor(skip / PAGE_SIZE) + 1
+      const cacheKey = `cina-search:${base}:${q.toLowerCase()}:${page}`
+      const hit = cache.get(cacheKey)
+      if (Array.isArray(hit) && hit.length) return hit
 
-      if (!Array.isArray(all) || all.length === 0) {
-        all = []
-        const seen = new Set()
-        try {
-          for (let page = 1; page <= SEARCH_MAX_PAGES; page++) {
-            const url =
-              page <= 1
-                ? `${base}/?s=${encodeURIComponent(q)}`
-                : `${base}/page/${page}/?s=${encodeURIComponent(q)}`
-            const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 18_000 })
-            if (!res.ok) break
-            const parsed = parseSearchHtml(await res.text(), base)
-            let added = 0
-            for (const it of parsed) {
-              if (seen.has(it.pagePath)) continue
-              seen.add(it.pagePath)
-              all.push(it)
-              added++
-            }
-            logger.info?.('cinamatic search page', { q, page, added, total: all.length })
-            if (parsed.length < 5) break
-          }
-          all = mapItems(all)
-          await enrichMissing(all, 16)
-          cache.set(cacheKey, all, all.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
-        } catch (err) {
-          logger.warn?.('cinamatic search failed', { message: err.message })
+      try {
+        const url =
+          page <= 1
+            ? `${base}/?s=${encodeURIComponent(q)}`
+            : `${base}/page/${page}/?s=${encodeURIComponent(q)}`
+        const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 18_000 })
+        if (!res.ok) {
+          logger.warn?.('cinamatic search HTTP', { status: res.status, url })
           return []
         }
+        const parsed = parseSearchHtml(await res.text(), base)
+        const items = mapItems(parsed)
+        await enrichMissing(items, 12)
+        cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
+        logger.info?.('cinamatic search', { q, page, count: items.length })
+        return items
+      } catch (err) {
+        logger.warn?.('cinamatic search failed', { message: err.message })
+        return []
       }
-
-      return all.slice(skip, skip + PAGE_SIZE * 2)
     },
 
     async browseType(type, ctx = {}) {
-      const kind = type === 'series' ? 'series' : 'movie'
+      const kind = type === 'series' ? 'series' : 'film'
       const path = kind === 'series' ? '/category/series/' : '/category/film/'
-      return this._browsePath(path, kind, ctx)
+      return this._browsePath(path, kind === 'film' ? 'movie' : 'series', kind, ctx)
     },
 
     async browse(catalogId, ctx = {}) {
       const cat = getCatalogById(catalogId)
       if (!cat) return []
-      return this._browsePath(cat.path, cat.type, ctx, catalogId)
+      return this._browsePath(cat.path, cat.type, cat.kind, ctx, catalogId)
     },
 
-    async _browsePath(path, type, ctx = {}, catalogId = path) {
+    async _browsePath(path, type, kind, ctx = {}, catalogId = path) {
       const base = this.baseUrl(ctx.config || {})
       const skip = Number(ctx.skip) || 0
       const page = Math.floor(skip / PAGE_SIZE) + 1
@@ -171,23 +161,25 @@ export function createCinamaticProvider(deps = {}) {
       if (Array.isArray(hit) && hit.length) return hit
 
       try {
-        const clean = path.endsWith('/') ? path : path + '/'
-        const listUrl =
-          page <= 1 ? `${base}${clean}` : `${base}${clean}page/${page}/`
+        const cat = { path }
+        const listUrl = catalogListUrl(base, cat, page)
         const res = await http.get(listUrl, { timeoutMs: ctx.timeoutMs || 18_000 })
         if (!res.ok) {
           logger.warn?.('cinamatic browse HTTP', { status: res.status, listUrl })
+          // End of catalog (404) → empty so client stops requesting
           return []
         }
         const html = await res.text()
-        let parsed = parseListingHtml(html, base, type)
+        let parsed = parseListingHtml(html, base, type, kind)
         parsed = parsed.map((it) => ({ ...it, type: type || it.type }))
-        const items = mapItems(parsed.slice(0, 24))
-        await enrichMissing(items, 16)
+        const items = mapItems(parsed)
+        await enrichMissing(items, 12)
         cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
         logger.info?.('cinamatic browse', {
           catalogId,
+          kind,
           page,
+          listUrl,
           count: items.length,
           htmlLen: html.length,
         })

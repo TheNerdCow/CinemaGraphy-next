@@ -1,6 +1,7 @@
 /**
  * Cinamatic (cinamatic.top) HTML parsers.
  * Paths: /YYYY/MM/DD/slug/ — WordPress date permalinks.
+ * Listing: strip shared hero, keep only the matching category body.
  */
 
 import {
@@ -28,79 +29,118 @@ export function decodePageId(itemId) {
   }
 }
 
-function categoryBody(html, forceType) {
+/**
+ * @param {string} html
+ * @param {'film'|'series'|'anime'|null} kind
+ */
+function categoryBody(html, kind) {
   const markers =
-    forceType === 'movie'
-      ? ['دسته فیلم', 'دسته\s*فیلم', 'category/film', 'class="archive']
-      : forceType === 'series'
-        ? ['دسته سریال', 'دسته\s*سریال', 'دسته انیمه', 'دسته\s*انیمه', 'category/series', 'category/anime']
-        : ['دسته فیلم', 'دسته سریال', 'دسته انیمه', 'class="archive']
+    kind === 'film'
+      ? ['دسته فیلم', 'دسته\s*فیلم']
+      : kind === 'anime'
+        ? ['دسته انیمه', 'دسته\s*انیمه', 'دسته انیمه‌ها']
+        : kind === 'series'
+          ? ['دسته سریال', 'دسته\s*سریال']
+          : ['دسته فیلم', 'دسته سریال', 'دسته انیمه', 'دسته انیمه‌ها']
 
   let start = -1
   for (const mk of markers) {
     const re = new RegExp(mk, 'i')
     const m = html.match(re)
-    if (m && m.index != null && m.index > 0) {
+    if (m && m.index != null && m.index > 50) {
       start = m.index
       break
     }
   }
-  if (start > 200) return html.slice(start)
+  if (start > 50) return html.slice(start)
+
+  // Drop shared «برترین» hero if present
   const hero = html.search(/برترین\s*(فیلم|سریال)/i)
   if (hero >= 0) {
-    const afterHero = html.indexOf('ادامه و دانلود', hero)
-    if (afterHero > hero) return html.slice(Math.max(0, afterHero - 500))
+    const after = html.search(/دسته\s*(فیلم|سریال|انیمه)/i)
+    if (after > hero) return html.slice(after)
   }
   return html
 }
 
-export function parseListingHtml(html, baseUrl, forceType) {
+/**
+ * @param {string} html
+ * @param {string} baseUrl
+ * @param {'movie'|'series'|null} forceType
+ * @param {'film'|'series'|'anime'|null} kind
+ */
+export function parseListingHtml(html, baseUrl, forceType, kind = null) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
-  const body = categoryBody(String(html || ''), forceType)
+  const body = categoryBody(String(html || ''), kind)
   const results = []
   const seen = new Set()
 
+  // Prefer h2 title links (main archive cards)
   const patterns = [
     /<h2[^>]*>\s*<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>\s*<\/h2>/gi,
     /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>\s*<h2[^>]*>([\s\S]*?)<\/h2>/gi,
-    /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
   ]
 
   for (const linkRe of patterns) {
     let m
     while ((m = linkRe.exec(body)) !== null) {
-      const abs = resolveUrl(base, m[1])
-      if (!abs || !isContentUrl(abs, base)) continue
-      const pagePath = pathFromUrl(abs, base)
-      if (!pagePath || seen.has(pagePath)) continue
-
-      let title = cleanTitle(stripTags(m[2]))
-      if (!title || title.length < 2) continue
-      if (/^(ادامه|دانلود|مشاهده|تریلر|ورود|عضویت|برترین)/i.test(title)) continue
-
-      const window = body.slice(Math.max(0, m.index - 400), m.index + 900)
-      if (forceType === 'movie' && /قسمت\s*\d+\s*از\s*فصل|پایان\s*فصل/i.test(window)) {
-        continue
-      }
-
-      const poster = extractPoster(window, base)
-      const year = extractYear(title) || extractYear(window)
-
-      seen.add(pagePath)
-      results.push({
-        itemId: encodePageId(pagePath),
-        title,
-        year: year || undefined,
-        type: forceType || inferType(window, title),
-        poster: poster || undefined,
-        pagePath,
-      })
-      if (results.length >= 40) break
+      pushCard(results, seen, base, m[1], m[2], body, m.index, forceType, kind)
     }
-    if (results.length >= 12) break
+  }
+
+  // Fallback: «ادامه و دانلود» near title links
+  if (results.length < 4) {
+    const aRe =
+      /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
+    let m
+    while ((m = aRe.exec(body)) !== null) {
+      const text = stripTags(m[2] || '')
+      if (!/ادامه|دانلود/i.test(text) && text.length < 8) continue
+      // Prefer the nearest h2 title as name
+      const window = body.slice(Math.max(0, m.index - 1200), m.index + 50)
+      const title =
+        match1(window, /<h2[^>]*>\s*<a[^>]*>([\s\S]*?)<\/a>/i) ||
+        match1(window, /<h2[^>]*>([\s\S]*?)<\/h2>/i) ||
+        text
+      pushCard(results, seen, base, m[1], title, body, m.index, forceType, kind)
+    }
   }
 
   return results
+}
+
+function pushCard(results, seen, base, href, rawTitle, body, index, forceType, kind) {
+  const abs = resolveUrl(base, href)
+  if (!abs || !isContentUrl(abs, base)) return
+  const pagePath = pathFromUrl(abs, base)
+  if (!pagePath || seen.has(pagePath)) return
+
+  let title = cleanTitle(stripTags(rawTitle))
+  if (!title || title.length < 2) return
+  if (/^(ادامه|دانلود|مشاهده|تریلر|ورود|عضویت|برترین)/i.test(title)) return
+
+  const window = body.slice(Math.max(0, index - 400), index + 1000)
+
+  // Film catalog: drop series-looking hero bleed
+  if ((forceType === 'movie' || kind === 'film') && /قسمت\s*\d+\s*از\s*فصل|پایان\s*فصل/i.test(window)) {
+    return
+  }
+
+  const poster = extractPoster(window, base)
+  const year = extractYear(title) || extractYear(window)
+  const type =
+    forceType ||
+    (kind === 'film' ? 'movie' : kind === 'series' || kind === 'anime' ? 'series' : inferType(window, title))
+
+  seen.add(pagePath)
+  results.push({
+    itemId: encodePageId(pagePath),
+    title,
+    year: year || undefined,
+    type,
+    poster: poster || undefined,
+    pagePath,
+  })
 }
 
 function inferType(window, title) {
@@ -109,7 +149,6 @@ function inferType(window, title) {
 }
 
 export function parseSearchHtml(html, baseUrl) {
-  // Search results page — no category hero cut
   return parseListingHtmlKeepAll(html, baseUrl)
 }
 
@@ -118,27 +157,20 @@ function parseListingHtmlKeepAll(html, baseUrl) {
   const results = []
   const seen = new Set()
   const linkRe =
-    /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
+    /<h2[^>]*>\s*<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>\s*<\/h2>/gi
   let m
   while ((m = linkRe.exec(html)) !== null) {
-    const abs = resolveUrl(base, m[1])
-    if (!abs || !isContentUrl(abs, base)) continue
-    const pagePath = pathFromUrl(abs, base)
-    if (!pagePath || seen.has(pagePath)) continue
-    let title = cleanTitle(stripTags(m[2]))
-    if (!title || title.length < 2) continue
-    if (/^(ادامه|دانلود|مشاهده|تریلر|ورود|عضویت)/i.test(title)) continue
-    const window = html.slice(Math.max(0, m.index - 400), m.index + 800)
-    seen.add(pagePath)
-    results.push({
-      itemId: encodePageId(pagePath),
-      title,
-      year: extractYear(title) || extractYear(window) || undefined,
-      type: inferType(window, title),
-      poster: extractPoster(window, base),
-      pagePath,
-    })
-    if (results.length >= 50) break
+    pushCard(results, seen, base, m[1], m[2], html, m.index, null, null)
+  }
+  if (results.length < 4) {
+    const aRe =
+      /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
+    while ((m = aRe.exec(html)) !== null) {
+      const title = cleanTitle(stripTags(m[2]))
+      if (!title || title.length < 3) continue
+      if (/^(ادامه|دانلود|مشاهده|تریلر)/i.test(title)) continue
+      pushCard(results, seen, base, m[1], title, html, m.index, null, null)
+    }
   }
   return results
 }
@@ -212,7 +244,6 @@ export function parseDetailStreams(html, baseUrl) {
     const fromUrl = analyzeMediaUrl(abs)
     const sec = sectionAt(am.index)
 
-    // Button labels like "1080 x265 1.6GB" or "720 949MB"
     const quality =
       fromUrl.quality ||
       extractQuality(text) ||
