@@ -1,5 +1,9 @@
 /**
  * Node runtime — Core + Stremio adapter + providers.
+ *
+ * Install modes:
+ * - /manifest.json  — public (free providers; Ava only if env/session cookie)
+ * - /c/:config/manifest.json — personal (cookie + provider picks encoded in URL)
  */
 
 import cors from 'cors'
@@ -8,6 +12,7 @@ import { loadEnvFile } from './load-env.js'
 import {
   configFromEnv,
   decodeUserConfig,
+  encodeUserConfig,
   applyMode,
 } from '../../core/config/app-config.js'
 import { createLogger } from '../../core/logging/logger.js'
@@ -21,7 +26,6 @@ import { createAvaMovieProvider } from '../../providers/avamovie/index.js'
 import { fromStremioProviderId, toStremioProviderId } from '../../core/ids/namespace.js'
 import { createHttpClient } from '../../core/http/client.js'
 import { parseListingHtml as parseF2Listing } from '../../providers/f2media/parse-listing.js'
-import { parseListingHtml as parseAvaListing } from '../../providers/avamovie/parse.js'
 import {
   setSessionCookie,
   getSessionCookie,
@@ -36,7 +40,10 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.4.8'
+const VERSION = process.env.ADDON_VERSION || '0.5.0'
+
+const FREE_PROVIDERS = ['f2media', 'cinamatic', 'aslmoviez']
+const ALL_PROVIDER_KEYS = [...FREE_PROVIDERS, 'avamovie']
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -64,13 +71,16 @@ function resolveConfig(req) {
     })
   }
 
-  const sessionAva = getSessionCookie('avamovie')
-  if (sessionAva) {
-    cfg = {
-      ...cfg,
-      providers: deepMergeProviders(cfg.providers, {
-        avamovie: { cookie: sessionAva, enabled: true },
-      }),
+  // Local debug session only if personal config did not already set cookie
+  if (!cfg.providers?.avamovie?.cookie) {
+    const sessionAva = getSessionCookie('avamovie')
+    if (sessionAva) {
+      cfg = {
+        ...cfg,
+        providers: deepMergeProviders(cfg.providers, {
+          avamovie: { cookie: sessionAva, enabled: true },
+        }),
+      }
     }
   }
   return cfg
@@ -100,11 +110,63 @@ function isAllGenres(genre) {
   return /^(all(\s*genres)?|همه(\s*ژانر(ها)?)?|none|any)$/i.test(g)
 }
 
-function landingHtml(flash) {
-  const hasAva = hasSessionCookie('avamovie') || Boolean(process.env.AVAMOVIE_COOKIE)
+function buildPersonalConfig({ providersEnabled, avaCookie }) {
+  const enabled = (providersEnabled || []).filter((k) => ALL_PROVIDER_KEYS.includes(k))
+  const unique = [...new Set(enabled.length ? enabled : FREE_PROVIDERS)]
+  const cookie = String(avaCookie || '').trim()
+
+  const providers = {}
+  if (cookie && unique.includes('avamovie')) {
+    providers.avamovie = { cookie: cookie.slice(0, 4096), enabled: true }
+  } else {
+    // drop avamovie if no cookie
+    const i = unique.indexOf('avamovie')
+    if (i >= 0) unique.splice(i, 1)
+  }
+
+  return {
+    providersEnabled: unique,
+    providers: Object.keys(providers).length ? providers : undefined,
+  }
+}
+
+function landingHtml(opts = {}) {
+  const {
+    flash,
+    personalPath = '',
+    selected = FREE_PROVIDERS,
+    cookieValue = '',
+  } = opts
+
+  const hasAva =
+    Boolean(cookieValue) ||
+    hasSessionCookie('avamovie') ||
+    Boolean(process.env.AVAMOVIE_COOKIE)
+
   const flashHtml = flash
     ? `<div class="flash ${flash.ok ? 'ok' : 'warn'}">${escapeHtml(flash.msg)}</div>`
     : ''
+
+  const checks = ALL_PROVIDER_KEYS.map((key) => {
+    const labels = {
+      f2media: 'F2Media (رایگان)',
+      cinamatic: 'Cinamatic (رایگان)',
+      aslmoviez: 'AslMoviez (رایگان)',
+      avamovie: 'AvaMovie (اشتراکی — نیاز به کوکی)',
+    }
+    const on = selected.includes(key) ? 'checked' : ''
+    return `<label class="chk"><input type="checkbox" name="providers" value="${key}" ${on}/> ${labels[key]}</label>`
+  }).join('\n')
+
+  const personalBlock = personalPath
+    ? `<div class="install" id="personalUrl"></div>
+    <div class="row">
+      <a class="btn primary" id="btnPersonal" href="${escapeHtml(personalPath)}">باز کردن مانیفست شخصی</a>
+      <button type="button" class="ghost" id="btnCopyPersonal">کپی لینک شخصی</button>
+    </div>
+    <p class="sub">این لینک کوکی و انتخاب پروایدرها را داخل خودش دارد — برای خودت نگه دار، عمومی نکن.</p>`
+    : `<p class="sub">بعد از ذخیره، لینک نصب شخصی اینجا ساخته می‌شود.</p>`
+
   return `<!doctype html>
 <html lang="fa" dir="rtl">
 <head>
@@ -114,11 +176,13 @@ function landingHtml(flash) {
 <style>
 :root{--bg:#0b0d12;--card:#12161f;--line:#243044;--txt:#e8eaef;--mut:#9aa3b5;--acc:#6ea8ff;--ok:#3ddc97;--warn:#f5a524}
 *{box-sizing:border-box}body{margin:0;font-family:system-ui,Tahoma,sans-serif;background:var(--bg);color:var(--txt);padding:1.25rem}
-.wrap{max-width:42rem;margin:0 auto}h1{font-size:1.35rem;margin:0 0 .35rem}.sub{color:var(--mut);font-size:.9rem;margin:0 0 1rem}
+.wrap{max-width:44rem;margin:0 auto}h1{font-size:1.35rem;margin:0 0 .35rem}.sub{color:var(--mut);font-size:.9rem;margin:0 0 1rem}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:1.1rem 1.2rem;margin-bottom:1rem}
 .card h2{font-size:1rem;margin:0 0 .75rem}a{color:var(--acc)}
 label{display:block;font-size:.85rem;color:var(--mut);margin-bottom:.35rem}
-textarea{width:100%;min-height:7rem;background:#0e121a;border:1px solid var(--line);border-radius:10px;color:var(--txt);padding:.7rem;font:0.85rem/1.4 ui-monospace,Consolas,monospace}
+.chk{display:flex;align-items:center;gap:.5rem;margin:.35rem 0;color:var(--txt);font-size:.9rem;cursor:pointer}
+.chk input{width:1.05rem;height:1.05rem}
+textarea{width:100%;min-height:6.5rem;background:#0e121a;border:1px solid var(--line);border-radius:10px;color:var(--txt);padding:.7rem;font:0.85rem/1.4 ui-monospace,Consolas,monospace}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.75rem}
 button,.btn{appearance:none;border:0;border-radius:10px;padding:.7rem 1.05rem;font-weight:700;cursor:pointer;font-size:.9rem;text-decoration:none;display:inline-flex;align-items:center}
 .primary{background:var(--acc);color:#061018}.ghost{background:#1a2230;color:var(--txt);border:1px solid var(--line)}
@@ -127,60 +191,84 @@ ul{margin:.4rem 0 0;padding-right:1.1rem;color:var(--mut);font-size:.88rem}
 code{background:#1a2230;padding:.1rem .35rem;border-radius:4px;font-size:.82rem}
 .badge{display:inline-block;padding:.15rem .5rem;border-radius:999px;font-size:.75rem;margin-right:.35rem}
 .badge.on{background:#143528;color:var(--ok)}.badge.off{background:#2a1e12;color:var(--warn)}
-.install{word-break:break-all;font-size:.85rem;background:#0e121a;border:1px solid var(--line);border-radius:10px;padding:.75rem;margin-top:.5rem}
+.install{word-break:break-all;font-size:.8rem;background:#0e121a;border:1px solid var(--line);border-radius:10px;padding:.75rem;margin-top:.5rem}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>سینماگرافی Next <span style="opacity:.55;font-size:.85rem">${VERSION}</span></h1>
-  <p class="sub">F2Media · Cinamatic · AslMoviez · AvaMovie</p>
+  <p class="sub">شخصی‌سازی → لینک نصب اختصاصی · بدون اشتراک گذاشتن کوکی</p>
 
   <div class="card">
-    <h2>نصب افزونه</h2>
-    <p class="sub" style="margin:0">لینک نصب ثابت است. کوکی آوا فقط روی سرور ذخیره می‌شود.</p>
-    <div class="install" id="installUrl"></div>
+    <h2>۱) انتخاب منابع</h2>
+    <form method="POST" action="/api/build-config" id="cfgForm">
+      ${checks}
+      <h2 style="margin-top:1.1rem">۲) کوکی آوا مووی <span class="badge ${hasAva ? 'on' : 'off'}">${hasAva ? 'آماده' : 'اختیاری'}</span></h2>
+      <p class="sub" style="margin-top:0">فقط اگر AvaMovie را تیک زدی لازم است. از مرورگر لاگین‌شده در <code>avadel.top</code> کپی کن.</p>
+      <label for="cookie">Cookie</label>
+      <textarea id="cookie" name="cookie" placeholder="PHPSESSID=...; wordpress_logged_in_...=...">${escapeHtml(cookieValue)}</textarea>
+      ${flashHtml}
+      <div class="row">
+        <button type="submit" class="primary" name="action" value="build">ساخت لینک نصب شخصی</button>
+        <button type="submit" class="ghost" name="action" value="test">ساخت و تست آوا</button>
+        <button type="submit" class="ghost" name="action" value="session">فقط سشن لوکال (دیباگ)</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>لینک نصب شخصی</h2>
+    ${personalBlock}
+  </div>
+
+  <div class="card">
+    <h2>مانیفست عمومی (بدون کوکی)</h2>
+    <p class="sub" style="margin:0">فقط منابع رایگان. برای آوا از لینک شخصی استفاده کن.</p>
+    <div class="install" id="publicUrl"></div>
     <div class="row">
-      <a class="btn primary" id="btnInstall" href="/manifest.json">باز کردن manifest</a>
-      <button type="button" class="ghost" id="btnCopy">کپی لینک نصب</button>
+      <a class="btn ghost" id="btnPublic" href="/manifest.json">manifest عمومی</a>
+      <button type="button" class="ghost" id="btnCopyPublic">کپی عمومی</button>
     </div>
     <ul>
       <li><a href="/health">/health</a></li>
       <li><a href="/debug/avamovie">/debug/avamovie</a></li>
-      <li><a href="/catalog/movie/avamovie_movies.json">کاتالوگ فیلم آوا</a></li>
     </ul>
-  </div>
-
-  <div class="card">
-    <h2>کوکی آوا مووی <span class="badge ${hasAva ? 'on' : 'off'}">${hasAva ? 'فعال' : 'غیرفعال'}</span></h2>
-    ${flashHtml}
-    <p class="sub" style="margin-top:0">از مرورگر لاگین‌شده در <code>avadel.top</code> مقدار Cookie را کپی کن.</p>
-    <form method="POST" action="/api/avamovie-cookie">
-      <label for="cookie">Cookie</label>
-      <textarea id="cookie" name="cookie" placeholder="PHPSESSID=...; wordpress_logged_in_...=..." required></textarea>
-      <div class="row">
-        <button type="submit" class="primary" name="action" value="save">ذخیره کوکی</button>
-        <button type="submit" class="ghost" name="action" value="clear" formnovalidate>پاک کردن</button>
-        <button type="submit" class="ghost" name="action" value="test">ذخیره و تست</button>
-      </div>
-    </form>
   </div>
 </div>
 <script>
 (function(){
   var origin = location.origin;
-  var man = origin + '/manifest.json';
-  var el = document.getElementById('installUrl');
-  if (el) el.textContent = man;
-  var a = document.getElementById('btnInstall');
-  if (a) a.href = man;
-  var btn = document.getElementById('btnCopy');
+  var pub = origin + '/manifest.json';
+  var el = document.getElementById('publicUrl');
+  if (el) el.textContent = pub;
+  var a = document.getElementById('btnPublic');
+  if (a) a.href = pub;
+  var btn = document.getElementById('btnCopyPublic');
   if (btn) btn.addEventListener('click', function(){
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(man).then(function(){ btn.textContent = 'کپی شد'; setTimeout(function(){ btn.textContent = 'کپی لینک نصب'; }, 1500); });
-    } else {
-      prompt('لینک نصب را کپی کن:', man);
-    }
+    copyText(pub, btn, 'کپی عمومی');
   });
+  var personalPath = ${JSON.stringify(personalPath || '')};
+  if (personalPath) {
+    var full = origin + personalPath;
+    var pe = document.getElementById('personalUrl');
+    if (pe) pe.textContent = full;
+    var pa = document.getElementById('btnPersonal');
+    if (pa) pa.href = full;
+    var pcb = document.getElementById('btnCopyPersonal');
+    if (pcb) pcb.addEventListener('click', function(){
+      copyText(full, pcb, 'کپی لینک شخصی');
+    });
+  }
+  function copyText(t, btn, label){
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(function(){
+        btn.textContent = 'کپی شد';
+        setTimeout(function(){ btn.textContent = label; }, 1500);
+      });
+    } else {
+      prompt('کپی کن:', t);
+    }
+  }
 })();
 </script>
 </body>
@@ -188,7 +276,7 @@ code{background:#1a2230;padding:.1rem .35rem;border-radius:4px;font-size:.82rem}
 }
 
 function escapeHtml(s) {
-  return String(s)
+  return String(s || '')
     .replace(/&/g, '&')
     .replace(/</g, '<')
     .replace(/>/g, '>')
@@ -199,7 +287,7 @@ function createApp() {
   const app = express()
   app.use(cors())
   app.use(express.json({ limit: '64kb' }))
-  app.use(express.urlencoded({ extended: false, limit: '64kb' }))
+  app.use(express.urlencoded({ extended: true, limit: '64kb' }))
 
   const sendManifest = (req, res) => {
     const config = resolveConfig(req)
@@ -216,30 +304,83 @@ function createApp() {
   app.get('/', (_req, res) => {
     res.type('html').send(landingHtml())
   })
+  app.get('/configure', (_req, res) => {
+    res.type('html').send(landingHtml())
+  })
 
-  app.post('/api/avamovie-cookie', async (req, res) => {
-    const action = String(req.body?.action || 'save')
-    const cookie = String(req.body?.cookie || '')
+  app.post('/api/build-config', async (req, res) => {
+    const action = String(req.body?.action || 'build')
+    let providers = req.body?.providers
+    if (!providers) providers = []
+    if (!Array.isArray(providers)) providers = [providers]
+    providers = providers.map(String).filter((k) => ALL_PROVIDER_KEYS.includes(k))
+    if (!providers.length) providers = [...FREE_PROVIDERS]
 
-    if (action === 'clear') {
-      setSessionCookie('avamovie', '')
-      res.type('html').send(landingHtml({ ok: true, msg: 'کوکی پاک شد.' }))
+    const cookie = String(req.body?.cookie || '').trim()
+
+    if (action === 'session') {
+      if (!cookie) {
+        res.type('html').send(
+          landingHtml({
+            flash: { ok: false, msg: 'برای سشن لوکال کوکی لازم است.' },
+            selected: providers,
+          }),
+        )
+        return
+      }
+      setSessionCookie('avamovie', cookie)
+      res.type('html').send(
+        landingHtml({
+          flash: {
+            ok: true,
+            msg: 'سشن لوکال ذخیره شد — فقط روی همین سرور، برای دیباگ /catalog بدون /c/',
+          },
+          selected: providers.includes('avamovie') ? providers : [...providers, 'avamovie'],
+          cookieValue: cookie,
+        }),
+      )
       return
     }
 
-    if (!cookie.trim()) {
-      res.type('html').send(landingHtml({ ok: false, msg: 'کوکی خالی است.' }))
+    const personal = buildPersonalConfig({
+      providersEnabled: providers,
+      avaCookie: cookie,
+    })
+
+    if (providers.includes('avamovie') && !cookie) {
+      res.type('html').send(
+        landingHtml({
+          flash: {
+            ok: false,
+            msg: 'AvaMovie تیک خورده ولی کوکی خالی است — کوکی بگذار یا تیک آوا را بردار.',
+          },
+          selected: providers,
+          cookieValue: '',
+        }),
+      )
       return
     }
 
-    const saved = setSessionCookie('avamovie', cookie)
-    if (!saved.ok) {
-      res.type('html').send(landingHtml({ ok: false, msg: saved.error || 'خطا' }))
+    const token = encodeUserConfig(personal)
+    if (!token) {
+      res.type('html').send(
+        landingHtml({
+          flash: { ok: false, msg: 'خطا در ساخت config' },
+          selected: providers,
+          cookieValue: cookie,
+        }),
+      )
       return
     }
 
-    if (action === 'test') {
-      const config = resolveConfig(req)
+    const personalPath = `/c/${token}/manifest.json`
+
+    if (action === 'test' && cookie) {
+      // also seed session so /debug/avamovie without token works
+      setSessionCookie('avamovie', cookie)
+      const config = resolveConfig({
+        params: { config: token },
+      })
       const provider = getProvider('avamovie')
       try {
         const items = await provider.browse('avamovie_movies', {
@@ -250,26 +391,61 @@ function createApp() {
         const n = items?.length || 0
         res.type('html').send(
           landingHtml({
-            ok: n > 0,
-            msg:
-              n > 0
-                ? `کوکی ذخیره شد — ${n} آیتم در کاتالوگ فیلم`
-                : 'کوکی ذخیره شد ولی کاتالوگ خالی است — /debug/avamovie را ببین',
+            flash: {
+              ok: n > 0,
+              msg:
+                n > 0
+                  ? `لینک شخصی آماده — تست آوا: ${n} فیلم`
+                  : 'لینک ساخته شد ولی کاتالوگ آوا خالی است — /debug را ببین',
+            },
+            personalPath,
+            selected: personal.providersEnabled,
+            cookieValue: cookie,
           }),
         )
       } catch (err) {
-        res
-          .type('html')
-          .send(landingHtml({ ok: false, msg: 'ذخیره شد ولی تست خطا داد: ' + err.message }))
+        res.type('html').send(
+          landingHtml({
+            flash: { ok: false, msg: 'لینک ساخته شد؛ تست خطا: ' + err.message },
+            personalPath,
+            selected: personal.providersEnabled,
+            cookieValue: cookie,
+          }),
+        )
       }
       return
     }
 
     res.type('html').send(
       landingHtml({
-        ok: true,
-        msg: `کوکی ذخیره شد (${saved.len} کاراکتر).`,
+        flash: {
+          ok: true,
+          msg: `لینک شخصی ساخته شد (${personal.providersEnabled.join(', ')})`,
+        },
+        personalPath,
+        selected: personal.providersEnabled,
+        cookieValue: cookie,
       }),
+    )
+  })
+
+  // legacy endpoints kept for local scripts
+  app.post('/api/avamovie-cookie', async (req, res) => {
+    req.body = {
+      ...(req.body || {}),
+      action: req.body?.action === 'clear' ? 'session' : req.body?.action || 'build',
+      providers: [...FREE_PROVIDERS, 'avamovie'],
+    }
+    if (String(req.body?.action) === 'clear' || req.body?.action === 'session' && !req.body?.cookie) {
+      setSessionCookie('avamovie', '')
+      res.type('html').send(landingHtml({ flash: { ok: true, msg: 'سشن پاک شد.' } }))
+      return
+    }
+    // reuse build-config logic via redirect-style: call same handlers
+    return app._router.handle(
+      Object.assign(req, { url: '/api/build-config', method: 'POST' }),
+      res,
+      () => {},
     )
   })
 
@@ -280,7 +456,16 @@ function createApp() {
       return res.json({ ok: true, cleared: true })
     }
     const cookie = String(req.body?.cookie || '')
-    res.json(setSessionCookie('avamovie', cookie))
+    const saved = setSessionCookie('avamovie', cookie)
+    const personal = buildPersonalConfig({
+      providersEnabled: [...FREE_PROVIDERS, 'avamovie'],
+      avaCookie: cookie,
+    })
+    const token = encodeUserConfig(personal)
+    res.json({
+      ...saved,
+      personalManifestPath: token ? `/c/${token}/manifest.json` : null,
+    })
   })
 
   app.get('/health', (req, res) => {
