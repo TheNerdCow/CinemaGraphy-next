@@ -1,15 +1,9 @@
 /**
  * AvaMovie provider — subscription / cookie session.
  *
- * Inside Iran: avadel.top is reachable; avamovie.shop is often filtered.
- * Outside Iran: avadel.top may timeout; avamovie.shop works via Cloudflare.
- *
- * Strategy: try preferred base first, but only accept HTML that looks like a
- * real listing/detail (has item-movie / downloadbox / title_en). Filtered or
- * soft-block pages are skipped and the next mirror is tried.
- *
- * Posters: prefer Cinemeta → images.metahub.space (no auth). Site CDN posters
- * often need session cookies and fail inside Stremio/Nuvio image loaders.
+ * Posters (same strategy as F2Media):
+ * 1) Public URL from listing HTML (Amazon media rewrite of Ava CDN keys)
+ * 2) Cinemeta / Metahub only when poster still missing
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
@@ -36,9 +30,7 @@ import {
   AVA_SERIES_GENRES,
 } from './catalogs.js'
 
-/** Primary for IR users (unfiltered). */
 const DEFAULT_BASE = 'https://avadel.top'
-/** Fallback for outside IR / when primary fails. */
 const MIRROR_BASES = ['https://avadel.top', 'https://avamovie.shop']
 const PAGE_SIZE = 24
 const CACHE_LIST_MS = 8 * 60_000
@@ -90,7 +82,6 @@ export function createAvaMovieProvider(deps = {}) {
     return out
   }
 
-  /** True if HTML looks like real AvaMovie content, not a filter/login shell. */
   function isUsefulHtml(html, kind = 'list') {
     if (!html || html.length < 800) return false
     const h = html
@@ -166,13 +157,12 @@ export function createAvaMovieProvider(deps = {}) {
       .trim()
     if (!clean) return {}
 
-    const key = `ava-meta:${type}:${clean.toLowerCase()}:${year || ''}`
+    const key = `ava-meta-v2:${type}:${clean.toLowerCase()}:${year || ''}`
     const hit = cache.get(key)
     if (hit !== undefined) return hit
     const out = {}
     try {
       const t = type === 'series' ? 'series' : 'movie'
-      // Try with year, then without (Ava year field is often episode text)
       const queries = year ? [`${clean} ${year}`, clean] : [clean]
       for (const q of queries) {
         const found = await withTimeout(cinemeta.search(q, t), 5000)
@@ -186,7 +176,6 @@ export function createAvaMovieProvider(deps = {}) {
           break
         }
       }
-      // series missed? try movie catalog (anime films)
       if (!out.imdb && t === 'series') {
         const found = await withTimeout(cinemeta.search(clean, 'movie'), 4000)
         if (found?.imdb) {
@@ -202,25 +191,17 @@ export function createAvaMovieProvider(deps = {}) {
     return out
   }
 
-  /**
-   * Prefer public Metahub posters. Site CDN (avadel.top/cdn/...) often requires
-   * the same session cookie and fails in Stremio's image proxy.
-   */
-  async function enrichPosters(items, limit = 24) {
-    const batch = (items || []).slice(0, limit)
+  /** Like F2Media: only fill items that still lack a poster. */
+  async function enrichListMissingPosters(items, limit = 18) {
+    const need = (items || []).filter((it) => !it.poster).slice(0, limit)
     await Promise.all(
-      batch.map(async (it) => {
+      need.map(async (it) => {
         try {
           const img = await lookupImages(it.title, it.year, it.type)
-          if (img.poster) {
-            it.poster = img.poster
-            if (img.background) it.background = img.background
-          }
-          // keep site poster only if Cinemeta failed
+          if (img.poster) it.poster = img.poster
           if (img.imdb) it.imdb = img.imdb
-          if (img.description) it.description = img.description
         } catch {
-          /* keep site poster if any */
+          /* keep without poster */
         }
       }),
     )
@@ -264,7 +245,7 @@ export function createAvaMovieProvider(deps = {}) {
       }
       const skip = Number(ctx.skip) || 0
       const page = Math.floor(skip / PAGE_SIZE) + 1
-      const cacheKey = `ava-search:${q.toLowerCase()}:${page}`
+      const cacheKey = `ava2-search:${q.toLowerCase()}:${page}`
       const hit = cache.get(cacheKey)
       if (Array.isArray(hit) && hit.length) return hit
 
@@ -276,9 +257,15 @@ export function createAvaMovieProvider(deps = {}) {
         const { html, base } = await fetchHtml(path, config, ctx.timeoutMs || 22_000, 'search')
         const parsed = parseSearchHtml(html, base)
         const items = mapItems(parsed)
-        await enrichPosters(items, 24)
+        await enrichListMissingPosters(items, 18)
         cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
-        logger.info?.('avamovie search', { q, page, count: items.length, base })
+        logger.info?.('avamovie search', {
+          q,
+          page,
+          count: items.length,
+          withPoster: items.filter((i) => i.poster).length,
+          base,
+        })
         return items
       } catch (err) {
         logger.warn?.('avamovie search failed', {
@@ -300,7 +287,7 @@ export function createAvaMovieProvider(deps = {}) {
       const skip = Number(ctx.skip) || 0
       const page = Math.floor(skip / PAGE_SIZE) + 1
       const kind = type === 'series' ? 'series' : 'movie'
-      const cacheKey = `ava-genre:${kind}:${genre}:${page}`
+      const cacheKey = `ava2-genre:${kind}:${genre}:${page}`
       const hit = cache.get(cacheKey)
       if (Array.isArray(hit) && hit.length) return hit
       try {
@@ -310,7 +297,7 @@ export function createAvaMovieProvider(deps = {}) {
         const { html, base } = await fetchHtml(path, config, ctx.timeoutMs || 22_000, 'list')
         const parsed = parseListingHtml(html, base, kind)
         const items = mapItems(parsed)
-        await enrichPosters(items, 24)
+        await enrichListMissingPosters(items, 18)
         cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
         return items
       } catch (err) {
@@ -337,7 +324,7 @@ export function createAvaMovieProvider(deps = {}) {
       }
       const skip = Number(ctx.skip) || 0
       const page = Math.floor(skip / PAGE_SIZE) + 1
-      const cacheKey = `ava-browse:${catalogId}:${page}`
+      const cacheKey = `ava2-browse:${catalogId}:${page}`
       const hit = cache.get(cacheKey)
       if (Array.isArray(hit) && hit.length) return hit
 
@@ -359,7 +346,7 @@ export function createAvaMovieProvider(deps = {}) {
         let parsed = parseListingHtml(html, base, type)
         parsed = parsed.map((it) => ({ ...it, type: type || it.type }))
         const items = mapItems(parsed)
-        await enrichPosters(items, 24)
+        await enrichListMissingPosters(items, 18)
         cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
         const withPoster = items.filter((i) => i.poster).length
         logger.info?.('avamovie browse', {
@@ -389,7 +376,7 @@ export function createAvaMovieProvider(deps = {}) {
         logger.warn?.('avamovie detail skipped — no cookie')
         return null
       }
-      const cacheKey = `ava-detail:${pagePath}`
+      const cacheKey = `ava2-detail:${pagePath}`
       const hit = cache.get(cacheKey)
       if (hit && (hit.streams?.length || hit.videos?.length)) return hit
 
@@ -432,7 +419,7 @@ export function createAvaMovieProvider(deps = {}) {
         }
 
         const imdb = meta.imdb || img.imdb
-        // Prefer public metahub; site og:image may need auth
+        // Prefer metahub when we have imdb; else Amazon-rewritten site poster
         const poster =
           (imdb && metahubPoster(imdb)) || img.poster || meta.poster || undefined
         const background =
@@ -527,7 +514,6 @@ function mapItems(parsed) {
     type: item.type,
     title: item.title,
     year: item.year,
-    // site poster kept as temporary fallback; enrichPosters may replace
     poster: item.poster || undefined,
     providerKey: 'avamovie',
     externalRefs: { pagePath: item.pagePath },
