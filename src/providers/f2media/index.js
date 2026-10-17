@@ -131,35 +131,49 @@ export function createF2MediaProvider(deps = {}) {
     async search(query, ctx = {}) {
       const q = String(query || '').trim()
       if (!q) return []
-      const base = this.baseUrl(ctx.config || {})
-      const cacheKey = `search:${base}:${q.toLowerCase()}`
+      const primary = this.baseUrl(ctx.config || {})
+      const skip = Number(ctx.skip) || 0
+      const page = Math.floor(skip / PAGE_SIZE) + 1
+      const cacheKey = `search:${primary}:${q.toLowerCase()}:${page}`
       const hit = cache.get(cacheKey)
       if (Array.isArray(hit) && hit.length > 0) return hit
 
+      const bases = [primary, ...MIRROR_BASES.filter((b) => b !== primary)]
       try {
-        const url = `${base}/?s=${encodeURIComponent(q)}`
-        const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 18_000 })
-        if (!res.ok) {
-          logger.warn?.('f2media search HTTP', { status: res.status, url })
-          return []
-        }
-        let parsed = parseSearchHtml(await res.text(), base)
+        let items = []
+        let usedBase = primary
+        for (const base of bases) {
+          const url =
+            page <= 1
+              ? `${base}/?s=${encodeURIComponent(q)}`
+              : `${base}/page/${page}/?s=${encodeURIComponent(q)}`
+          const res = await http.get(url, { timeoutMs: ctx.timeoutMs || 18_000 })
+          if (!res.ok) {
+            logger.warn?.('f2media search HTTP', { status: res.status, url })
+            continue
+          }
+          let parsed = parseSearchHtml(await res.text(), base)
 
-        if (parsed.length === 0) {
-          const q2 = q.replace(/\b(19|20)\d{2}\b/g, '').replace(/\s+/g, ' ').trim()
-          if (q2 && q2 !== q) {
-            const res2 = await http.get(`${base}/?s=${encodeURIComponent(q2)}`, {
-              timeoutMs: ctx.timeoutMs || 12_000,
-            })
-            if (res2.ok) parsed = parseSearchHtml(await res2.text(), base)
+          if (parsed.length === 0 && page === 1) {
+            const q2 = q.replace(/\b(19|20)\d{2}\b/g, '').replace(/\s+/g, ' ').trim()
+            if (q2 && q2 !== q) {
+              const res2 = await http.get(`${base}/?s=${encodeURIComponent(q2)}`, {
+                timeoutMs: ctx.timeoutMs || 12_000,
+              })
+              if (res2.ok) parsed = parseSearchHtml(await res2.text(), base)
+            }
+          }
+
+          items = mapItems(parsed)
+          if (items.length) {
+            usedBase = base
+            break
           }
         }
 
-        const items = mapItems(parsed)
         await enrichListMissingPosters(items, 14)
-        if (items.length) cache.set(cacheKey, items, CACHE_LIST_MS)
-        else cache.set(cacheKey, items, CACHE_EMPTY_MS)
-        logger.info?.('f2media search', { q, count: items.length })
+        cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
+        logger.info?.('f2media search', { q, page, usedBase, count: items.length })
         return items
       } catch (err) {
         logger.warn?.('f2media search failed', { message: err.message })
@@ -215,12 +229,15 @@ export function createF2MediaProvider(deps = {}) {
       const hit = cache.get(cacheKey)
       if (Array.isArray(hit) && hit.length > 0) return hit
 
+      const bases = [primary, ...MIRROR_BASES.filter((b) => b !== primary)]
       try {
-        const listUrl =
-          page <= 1
-            ? `${primary}${path}`
-            : `${primary}${path}page/${page}/`
-        const items = await listFromUrl(listUrl, primary, kind, ctx)
+        let items = []
+        for (const base of bases) {
+          const listUrl =
+            page <= 1 ? `${base}${path}` : `${base}${path}page/${page}/`
+          items = await listFromUrl(listUrl, base, kind, ctx)
+          if (items.length) break
+        }
         cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
         return items
       } catch (err) {
