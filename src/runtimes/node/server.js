@@ -20,7 +20,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.3.3'
+const VERSION = process.env.ADDON_VERSION || '0.3.4'
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
@@ -190,7 +190,6 @@ a{color:#6ea8ff}.card{max-width:40rem;margin:auto;background:#12161f;border-radi
       }
       try {
         let items = []
-        // Search on cinamatic film/series/anime catalogs
         if (search && provider.search) {
           items = await provider.search(search, { config, skip, timeoutMs: 18_000 })
         } else if (provider.browse) {
