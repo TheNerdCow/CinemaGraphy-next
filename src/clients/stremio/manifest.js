@@ -5,7 +5,7 @@
 import { movieGenreNames, seriesGenreNames } from '../../providers/f2media/genres.js'
 
 /** Providers that already ship dedicated browse catalogs (no generic _movies/_series). */
-const BROWSE_ONLY_KEYS = new Set(['cinamatic', 'aslmoviez', 'avamovie'])
+const BROWSE_ONLY_KEYS = new Set(['cinamatic', 'aslmoviez', 'avamovie', 'digimovie'])
 
 export function buildStremioManifest(config, providers = []) {
   const name = [config.addonName, config.nameSuffix].filter(Boolean).join('')
