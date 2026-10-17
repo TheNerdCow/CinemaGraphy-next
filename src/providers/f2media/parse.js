@@ -140,7 +140,7 @@ function collectLinksFromHtml(html, base, out, seen, sectionAudio) {
       encoder: encoder && !/^unknown$/i.test(encoder) ? encoder : undefined,
       isAudioOnly,
       providerName: 'F2Media',
-      providerEmoji: '🎬',
+      providerEmoji: '\ud83c\udfac',
     }
 
     out.push({
@@ -212,11 +212,20 @@ function isSpamDescription(d) {
   return false
 }
 
+function sameSite(a, b) {
+  try {
+    const ha = new URL(a).hostname.replace(/^www\./i, '').toLowerCase()
+    const hb = new URL(b).hostname.replace(/^www\./i, '').toLowerCase()
+    return ha === hb
+  } catch {
+    return false
+  }
+}
+
 function isLikelyDetailUrl(abs, base) {
   try {
     const u = new URL(abs)
-    const b = new URL(base)
-    if (u.origin !== b.origin) return false
+    if (!sameSite(abs, base)) return false
     const path = u.pathname.replace(/\/+$/, '')
     if (!path) return false
     if (
@@ -229,7 +238,9 @@ function isLikelyDetailUrl(abs, base) {
     if (/\.(css|js|png|jpg|jpeg|webp|gif|svg|ico)(\?|$)/i.test(path)) return false
     const segs = path.split('/').filter(Boolean)
     if (segs.length < 1) return false
+    // /76906/title-slug or /series/76906/title
     if (/^\d+$/.test(segs[0]) && segs.length >= 2) return true
+    if (segs[0] === 'series' && /^\d+$/.test(segs[1] || '') && segs.length >= 3) return true
     if (segs.length >= 1 && /\b(19|20)\d{2}\b/.test(path)) return true
     if (segs.length === 1 && segs[0].length < 20) return false
     return segs.length >= 2
@@ -246,6 +257,8 @@ function isNoisePath(pagePath) {
       first,
     )
   ) {
+    // Allow /series/12345/slug
+    if (first === 'series' && /^series\/\d+\//i.test(p)) return false
     return true
   }
   if (/^\d+tmdb$/i.test(first)) return true
@@ -282,9 +295,8 @@ function resolveUrl(base, href) {
 
 function pathFromUrl(abs, base) {
   try {
+    if (!sameSite(abs, base)) return null
     const u = new URL(abs)
-    const b = new URL(base)
-    if (u.origin !== b.origin) return null
     return (u.pathname.replace(/^\/+/, '') + u.search).replace(/\/+$/, '')
   } catch {
     return null
@@ -338,7 +350,7 @@ function isNoiseTitle(title) {
   const t = title.trim()
   if (t.length < 2 || t.length > 200) return true
   if (
-    /^(صفحه|خانه|ورود|ثبت|جستجو|دسته‌|ژانر|فیلم\s*ها|سریال\s*ها|بازیگران|home|login|search|menu|next|prev)$/i.test(
+    /^(صفحه|خانه|ورود|ثبت|جستجو|دسته\u200c|ژانر|فیلم\s*ها|سریال\s*ها|بازیگران|home|login|search|menu|next|prev)$/i.test(
       t,
     )
   ) {
@@ -362,8 +374,8 @@ function stripTags(s) {
   return String(s)
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
+    .replace(/&/g, '&')
+    .replace(/"/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, ' ')
     .trim()
@@ -371,8 +383,8 @@ function stripTags(s) {
 
 function decodeHtml(s) {
   return String(s)
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
+    .replace(/&/g, '&')
+    .replace(/"/g, '"')
     .replace(/&#39;/g, "'")
 }
 
