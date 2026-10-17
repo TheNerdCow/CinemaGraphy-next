@@ -4,6 +4,9 @@
 
 import { movieGenreNames, seriesGenreNames } from '../../providers/f2media/genres.js'
 
+/** Providers that already ship dedicated browse catalogs (no generic _movies/_series). */
+const BROWSE_ONLY_KEYS = new Set(['cinamatic', 'aslmoviez'])
+
 export function buildStremioManifest(config, providers = []) {
   const name = [config.addonName, config.nameSuffix].filter(Boolean).join('')
   const resources = []
@@ -38,9 +41,7 @@ export function buildStremioManifest(config, providers = []) {
 
   if (config.resources.catalog) {
     for (const p of providers) {
-      // Cinamatic already ships film/series/anime browse catalogs with search —
-      // do not add a second "Cinamatic — فیلم" via the generic search pair.
-      if (p.capabilities?.search && p.key !== 'cinamatic') {
+      if (p.capabilities?.search && !BROWSE_ONLY_KEYS.has(p.key)) {
         const movieGenres =
           p.key === 'f2media' ? movieGenreNames() : p.capabilities.movieGenres || []
         const seriesGenres =
