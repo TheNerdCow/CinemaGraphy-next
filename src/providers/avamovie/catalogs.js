@@ -1,4 +1,4 @@
-/** AvaMovie (avadel.top) editorial catalogs — cookie auth required. */
+/** AvaMovie (avamovie.shop) editorial catalogs — cookie auth required. */
 
 /** @typedef {{ id: string, type: 'movie'|'series', kind: string, nameFa: string, path: string }} AvaCatalog */
 
@@ -28,8 +28,8 @@ export const AVA_CATALOGS = [
   {
     id: 'avamovie_korean',
     type: 'series',
-    kind: 'korean',
-    nameFa: 'AvaMovie — سریال کره‌ای',
+    kind: 'east_asian',
+    nameFa: 'AvaMovie — سریال آسیای شرقی',
     path: '/east-asian-series/',
   },
   {
