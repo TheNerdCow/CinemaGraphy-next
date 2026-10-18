@@ -41,7 +41,6 @@ export const DIGI_CATALOGS = [
   },
 ]
 
-/** ژانرهای رایج منوی دیجی — مسیر /genre/{slug}/ */
 export const DIGI_MOVIE_GENRES = [
   'اکشن',
   'انیمیشن',
@@ -100,8 +99,11 @@ export const DIGI_GENRE_SLUGS = {
   ورزشی: 'ورزشی',
 }
 
-/** Items typically returned per archive page on Digi WP theme */
-export const DIGI_PAGE_SIZE = 20
+/**
+ * Must stay close to real items-per-page so Nuvio/Stremio skip maps to page N.
+ * Digi archive pages are typically ~10–16 posts.
+ */
+export const DIGI_PAGE_SIZE = 12
 
 export function getCatalogById(id) {
   return DIGI_CATALOGS.find((c) => c.id === id) || null
@@ -145,13 +147,20 @@ export function catalogListUrl(base, catalog, page = 1) {
   return `${root}${basePath}/page/${page}/`
 }
 
-export function genreListUrl(base, genreLabel, type, page = 1) {
-  const root = String(base).replace(/\/+$/, '')
+/** Try several Digi genre URL shapes (theme differs by mirror). */
+export function genreListPaths(genreLabel, type, page = 1) {
   const slug = DIGI_GENRE_SLUGS[genreLabel] || genreLabel
   const encoded = encodeURI(slug)
-  // Digi often uses /genre/{name}/ with optional filter
-  const filter =
-    type === 'series' ? '?type=series' : type === 'movie' ? '?type=movie' : ''
-  if (page <= 1) return `${root}/genre/${encoded}/${filter}`
-  return `${root}/genre/${encoded}/page/${page}/${filter}`
+  const pageSuffix = page <= 1 ? '/' : `/page/${page}/`
+  const paths = [
+    `/genre/${encoded}${pageSuffix}`,
+    `/category/${encoded}${pageSuffix}`,
+    `/tag/${encoded}${pageSuffix}`,
+  ]
+  if (type === 'series') {
+    paths.unshift(`/genre/${encoded}${pageSuffix}?archive_filter_type=series`)
+  } else if (type === 'movie') {
+    paths.unshift(`/genre/${encoded}${pageSuffix}?archive_filter_type=movie`)
+  }
+  return paths
 }
