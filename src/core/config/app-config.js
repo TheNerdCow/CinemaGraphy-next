@@ -31,7 +31,7 @@ export function defaultConfig() {
     nameSuffix: '',
     addonName: 'سینماگرافی',
     addonId: 'com.cinemagraphy.next',
-    version: '0.3.0',
+    version: '0.6.1',
     externalCatalogs: [],
     browseCatalogs: {},
   }
