@@ -1,6 +1,6 @@
 /**
  * Node runtime — Core + Stremio adapter + providers.
- * CinemaGraphy-next 0.6.1 — catalogs fix (providers passed to manifest)
+ * CinemaGraphy-next 0.6.1 — catalogs + search type filter
  */
 import cors from 'cors'
 import express from 'express'
@@ -281,9 +281,14 @@ function createApp() {
         }
         const wantType = type === 'series' ? 'series' : 'movie'
         let items = []
-        if (search && provider.search) items = await provider.search(search, { config: cfg, skip, timeoutMs: 18000 })
-        else if (genre && provider.browseGenre) items = await provider.browseGenre(wantType, genre, { config: cfg, skip, timeoutMs: 18000 })
-        else if (provider.browseType) items = await provider.browseType(wantType, { config: cfg, skip, timeoutMs: 18000 })
+        if (search && provider.search) {
+          items = await provider.search(search, { config: cfg, skip, timeoutMs: 18000 })
+          items = (items || []).filter((it) => (it.type || wantType) === wantType)
+        } else if (genre && provider.browseGenre) {
+          items = await provider.browseGenre(wantType, genre, { config: cfg, skip, timeoutMs: 18000 })
+        } else if (provider.browseType) {
+          items = await provider.browseType(wantType, { config: cfg, skip, timeoutMs: 18000 })
+        }
         return res.json({ metas: toMetas(items, providerKey) })
       }
 
@@ -300,16 +305,20 @@ function createApp() {
           return res.json({ metas: [] })
         }
         let items = []
-        if (search && provider.search) items = await provider.search(search, { config: cfg, skip, timeoutMs: 22000 })
-        else if (genre && provider.browseGenre) {
-          items = await provider.browseGenre(type === 'series' ? 'series' : 'movie', genre, {
+        const wantType = type === 'series' ? 'series' : 'movie'
+        if (search && provider.search) {
+          items = await provider.search(search, { config: cfg, skip, timeoutMs: 22000 })
+          items = (items || []).filter((it) => (it.type || wantType) === wantType)
+        } else if (genre && provider.browseGenre) {
+          items = await provider.browseGenre(wantType, genre, {
             config: cfg,
             skip,
             timeoutMs: 22000,
           })
-        } else if (provider.browse) items = await provider.browse(id, { config: cfg, skip, timeoutMs: 22000 })
-        else if (provider.browseType) {
-          items = await provider.browseType(type === 'series' ? 'series' : 'movie', {
+        } else if (provider.browse) {
+          items = await provider.browse(id, { config: cfg, skip, timeoutMs: 22000 })
+        } else if (provider.browseType) {
+          items = await provider.browseType(wantType, {
             config: cfg,
             skip,
             timeoutMs: 22000,
