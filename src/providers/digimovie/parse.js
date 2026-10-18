@@ -1,6 +1,7 @@
 /**
  * DigiMovie HTML parsers — digimoviez*.top WordPress theme.
  * Listing: main archive cards only. Reject sidebar episode tiles + dubbed promo rail.
+ * Streams: size unit-first (GB 1.34 / MB 450) + series quality-group inheritance.
  */
 
 const LRE = '\u202A'
@@ -37,7 +38,6 @@ const NOISE_PATH_RE =
 
 function listingScope(html) {
   let h = String(html || '')
-  // Persian-dubbed promo rail (not a real catalog grid)
   h = h.replace(/فیلم[‌\s]*های\s*دوبله[\s\S]{0,30000}?(?=<main|class=["'][^"']*archive|<\/body>)/gi, ' ')
   h = h.replace(/دوبله\s*فارسی[\s\S]{0,25000}?(?=<main|class=["'][^"']*archive|<\/body>)/gi, ' ')
   h = h.replace(/<aside[\s\S]*?<\/aside>/gi, ' ')
@@ -241,6 +241,47 @@ export function parseDetailMeta(html, baseUrl) {
 export function parseDetailStreams(html, baseUrl) {
   const out = []
   const seen = new Set()
+
+  // Quality-group headers on Digi series pages carry size/encoder once for all eps
+  // e.g. "1080p WEB-DL SoftSub · Encoder : DigiMoviez · MB 450 · فصل 1"
+  const sections = []
+  const headerRe =
+    /(2160p|1080p|720p|480p)[^\n<]{0,120}?(WEB-?DL|WEBRip|BluRay|HDRip)?[^\n<]{0,80}?(SoftSub|HardSub|دوبله)?/gi
+  let hm
+  while ((hm = headerRe.exec(html)) !== null) {
+    const window = html.slice(Math.max(0, hm.index - 80), hm.index + 500)
+    const plain = stripTags(window)
+    sections.push({
+      index: hm.index,
+      quality: hm[1] ? hm[1].toLowerCase() : null,
+      source: hm[2] ? String(hm[2]).replace(/WEBDL/i, 'WEB-DL') : null,
+      audio: /دوبله|Dubbed/i.test(plain)
+        ? 'dub'
+        : /SoftSub|HardSub|زیرنویس/i.test(plain)
+          ? 'sub'
+          : null,
+      size: extractSize(plain),
+      encoder:
+        match1(plain, /Encoder\s*[:=]\s*([A-Za-z0-9._-]+)/i) ||
+        match1(plain, /(DigiMoviez?)/i) ||
+        null,
+      season: (() => {
+        const sn = match1(plain, /فصل\s*([\d\u06f0-\u06f9]+)/)
+        return sn ? Number(toAsciiDigits(sn)) : null
+      })(),
+    })
+  }
+  sections.sort((a, b) => a.index - b.index)
+
+  function sectionAt(pos) {
+    let best = null
+    for (const s of sections) {
+      if (s.index <= pos) best = s
+      else break
+    }
+    return best
+  }
+
   const aRe = /<a[^>]+href=["']([^"']+)["'][^>]*(?:>([\s\S]*?)<\/a>|(?:\s*\/>))/gi
   let am
   while ((am = aRe.exec(html)) !== null) {
@@ -249,10 +290,17 @@ export function parseDetailStreams(html, baseUrl) {
     if (seen.has(href)) continue
     seen.add(href)
 
-    const start = Math.max(0, am.index - 450)
-    const local = html.slice(start, am.index + am[0].length + 100)
+    const start = Math.max(0, am.index - 900)
+    const local = html.slice(start, am.index + am[0].length + 120)
     const localText = stripTags(local) + ' ' + href
     const info = analyze(href, localText)
+    const sec = sectionAt(am.index)
+
+    if (!info.size && sec?.size) info.size = sec.size
+    if (!info.quality && sec?.quality) info.quality = sec.quality
+    if (!info.source && sec?.source) info.source = sec.source
+    if (!info.audio && sec?.audio) info.audio = sec.audio
+    if (!info.encoder && sec?.encoder) info.encoder = sec.encoder
 
     const se = href.match(/[Ss]0?(\d+)[Ee]0?(\d+)/)
     if (se) {
@@ -263,6 +311,7 @@ export function parseDetailStreams(html, baseUrl) {
       if (epFa) info.episode = Number(toAsciiDigits(epFa))
       const snFa = match1(localText, /فصل\s*([\d\u06f0-\u06f9]+)/)
       if (snFa) info.season = Number(toAsciiDigits(snFa))
+      else if (sec?.season != null) info.season = sec.season
     }
 
     out.push({
@@ -357,7 +406,7 @@ function analyze(url, ctx) {
   const quality =
     match1(t, /\b(2160p|1080p|720p|480p|360p)\b/i) ||
     match1(url, /\b(2160p|1080p|720p|480p)\b/i)
-  const size = normalizeSize(match1(t, /\b(\d+(?:\.\d+)?\s*(?:GB|MB|گیگ|مگ))\b/i))
+  const size = extractSize(t) || extractSize(url)
   const audio =
     /دوبله|Farsi\.Dubbed|Dubbed/i.test(t)
       ? 'dub'
@@ -376,7 +425,9 @@ function analyze(url, ctx) {
   const hdr = /\bHDR\b/i.test(t)
   const bit10 = /10\s*bit|10bit/i.test(t)
   const encoder =
-    match1(t, /(?:DigiMovie|PSA|Pahe|PaHe|FLUX|YTS|RARBG)(?=\.|\s|$|\?)/i) || undefined
+    match1(t, /Encoder\s*[:=]\s*([A-Za-z0-9._-]+)/i) ||
+    match1(t, /(?:DigiMoviez?|PSA|Pahe|PaHe|FLUX|YTS|RARBG)(?=\.|\s|$|\?)/i) ||
+    undefined
   return {
     quality: quality || undefined,
     size: size || undefined,
@@ -557,6 +608,16 @@ function toAsciiDigits(s) {
   return String(s || '').replace(/[\u06f0-\u06f9]/g, (c) => String(c.charCodeAt(0) - 0x06f0))
 }
 
+/** Digi shows both "1.34 GB" and "GB 1.34" / "MB 450". */
+function extractSize(text) {
+  const s = String(text || '')
+  let m = s.match(/(?:^|[^\d.])(\d+(?:[.,]\d+)?)\s*(GB|MB|گیگابایت|مگابایت|گیگ|مگ)(?![\w\u0600-\u06ff])/i)
+  if (m) return normalizeSize(m[1].replace(',', '.') + ' ' + m[2])
+  m = s.match(/(?:^|[^\w])(GB|MB|گیگابایت|مگابایت|گیگ|مگ)\s*[:=]?\s*(\d+(?:[.,]\d+)?)(?![\d.])/i)
+  if (m) return normalizeSize(m[2].replace(',', '.') + ' ' + m[1])
+  return null
+}
+
 function normalizeSize(s) {
   if (!s) return null
   return String(s)
@@ -564,6 +625,7 @@ function normalizeSize(s) {
     .replace(/مگابایت/i, 'MB')
     .replace(/گیگ/i, 'GB')
     .replace(/مگ/i, 'MB')
+    .replace(/\s+/g, ' ')
     .trim()
 }
 
