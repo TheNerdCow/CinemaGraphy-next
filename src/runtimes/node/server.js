@@ -97,7 +97,11 @@ function buildPersonalConfig({ providersEnabled, avaCookie, digiCookie, avaBaseU
 }
 
 function escapeHtml(s) {
-  return String(s || '').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/"/g, '"')
+  return String(s || '')
+    .replace(/&/g, '\u0026amp;')
+    .replace(/</g, '\u0026lt;')
+    .replace(/>/g, '\u0026gt;')
+    .replace(/"/g, '\u0026quot;')
 }
 
 function landingHtml(opts = {}) {
@@ -112,7 +116,7 @@ function landingHtml(opts = {}) {
     ? `<div style="padding:10px 12px;border-radius:8px;margin:12px 0;background:${flash.ok ? '#0f3d2e' : '#3d1515'};border:1px solid ${flash.ok ? '#1a7a55' : '#a33'}">${escapeHtml(flash.msg)}</div>`
     : ''
   const install = personalPath
-    ? `<p style="margin-top:14px"><a href="stremio://${escapeHtml(personalPath.replace(/^https?:\/\//, ''))}" style="display:inline-block;padding:10px 16px;background:#7c3aed;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">نصب در استریمیو</a>
+    ? `<p style="margin-top:14px"><a href="stremio://${escapeHtml(personalPath.replace(/^https?:\/\/\/, ''))}" style="display:inline-block;padding:10px 16px;background:#7c3aed;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">نصب در استریمیو</a>
        <br><small style="opacity:.7">یا مانیفست: <code dir="ltr">${escapeHtml(personalPath)}</code></small></p>`
     : ''
   return `<!DOCTYPE html>
