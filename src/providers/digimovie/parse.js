@@ -1,6 +1,6 @@
 /**
  * DigiMovie HTML parsers — digimoviez*.top WordPress theme.
- * Listing: main archive cards only. Reject sidebar "منتشر شد" episode tiles.
+ * Listing: main archive cards only. Reject sidebar episode tiles + dubbed promo rail.
  */
 
 const LRE = '\u202A'
@@ -29,7 +29,6 @@ const NOISE_TITLE_IN =
 const EPISODE_TITLE_RE =
   /^(قسمت\s*[\d\u06f0-\u06f9]+(\s*فصل\s*[\d\u06f0-\u06f9\w]+)?|فصل\s*[\d\u06f0-\u06f9]+(\s*قسمت\s*[\d\u06f0-\u06f9]+)?)/i
 
-/** Sidebar "new episode" tiles: قسمت N فصل … با زیرنویس منتشر شد */
 const EPISODE_UPDATE_CARD_RE =
   /قسمت\s*[\d\u06f0-\u06f9]+[\s\S]{0,40}?(فصل|زیرنویس|منتشر)|فصل\s*[\d\u06f0-\u06f9]+[\s\S]{0,40}?(قسمت|زیرنویس|منتشر)|منتشر\s*شد/i
 
@@ -38,6 +37,9 @@ const NOISE_PATH_RE =
 
 function listingScope(html) {
   let h = String(html || '')
+  // Persian-dubbed promo rail (not a real catalog grid)
+  h = h.replace(/فیلم[‌\s]*های\s*دوبله[\s\S]{0,30000}?(?=<main|class=["'][^"']*archive|<\/body>)/gi, ' ')
+  h = h.replace(/دوبله\s*فارسی[\s\S]{0,25000}?(?=<main|class=["'][^"']*archive|<\/body>)/gi, ' ')
   h = h.replace(/<aside[\s\S]*?<\/aside>/gi, ' ')
   h = h.replace(/<(?:div|section)[^>]+class=["'][^"']*(?:sidebar|widget|side-bar|off-canvas|secondary|side_bar|side-panel|sticky-side|home-side|latest-side)[^"']*["'][\s\S]*?<\/(?:div|section)>/gi, ' ')
   h = h.replace(/id=["'](?:sidebar|secondary|widgets?|side)["'][\s\S]{0,120000}/gi, ' ')
@@ -59,13 +61,13 @@ function extractCards(scope) {
   let m
   while ((m = re.exec(scope)) !== null) {
     cards.push(m[0])
-    if (cards.length >= 40) break
+    if (cards.length >= 24) break
   }
   if (cards.length < 4) {
     const aRe = /<article[\s\S]{80,6000}?<\/article>/gi
     while ((m = aRe.exec(scope)) !== null) {
       cards.push(m[0])
-      if (cards.length >= 40) break
+      if (cards.length >= 24) break
     }
   }
   return cards
@@ -150,7 +152,7 @@ export function parseListingHtml(html, baseUrl, forceType) {
     const item = cardToItem(card, base, forceType, seen)
     if (item) {
       results.push(item)
-      if (results.length >= 24) break
+      if (results.length >= 12) break
     }
   }
 
@@ -199,7 +201,7 @@ export function parseListingHtml(html, baseUrl, forceType) {
         poster: poster || undefined,
         pagePath,
       })
-      if (results.length >= 24) break
+      if (results.length >= 12) break
     }
   }
 
