@@ -2,7 +2,7 @@
  * Cinamatic (cinamatic.top) HTML parsers.
  * Paths: /YYYY/MM/DD/slug/ — WordPress date permalinks.
  * Listing: strip shared hero, keep only the matching category body.
- * Restored clean (no double-escaped regex). providerEmoji 🎬
+ * Clean regex (literal patterns — no double-escape).
  */
 
 import {
@@ -33,16 +33,15 @@ export function decodePageId(itemId) {
 function categoryBody(html, kind) {
   const markers =
     kind === 'film'
-      ? ['دسته فیلم', 'دسته\\s*فیلم']
+      ? [/دسته\s*فیلم/i]
       : kind === 'anime'
-        ? ['دسته انیمه', 'دسته\\s*انیمه', 'دسته انیمه‌ها']
+        ? [/دسته\s*انیمه/i, /دسته\s*انیمه‌ها/i]
         : kind === 'series'
-          ? ['دسته سریال', 'دسته\\s*سریال']
-          : ['دسته فیلم', 'دسته سریال', 'دسته انیمه', 'دسته انیمه‌ها']
+          ? [/دسته\s*سریال/i]
+          : [/دسته\s*فیلم/i, /دسته\s*سریال/i, /دسته\s*انیمه/i]
 
   let start = -1
-  for (const mk of markers) {
-    const re = new RegExp(mk, 'i')
+  for (const re of markers) {
     const m = html.match(re)
     if (m && m.index != null && m.index > 50) {
       start = m.index
@@ -51,9 +50,9 @@ function categoryBody(html, kind) {
   }
   if (start > 50) return html.slice(start)
 
-  const hero = html.search(new RegExp('برترین\\s*(فیلم|سریال)', 'i'))
+  const hero = html.search(/برترین\s*(فیلم|سریال)/i)
   if (hero >= 0) {
-    const after = html.search(new RegExp('دسته\\s*(فیلم|سریال|انیمه)', 'i'))
+    const after = html.search(/دسته\s*(فیلم|سریال|انیمه)/i)
     if (after > hero) return html.slice(after)
   }
   return html
@@ -66,8 +65,8 @@ export function parseListingHtml(html, baseUrl, forceType, kind = null) {
   const seen = new Set()
 
   const patterns = [
-    new RegExp('<h2[^>]*>\\s*<a[^>]+href=["\'](https?:\\/\\/[^"\']+|\\/[^"\']+)["\'][^>]*>([\\s\\S]*?)<\\/a>\\s*<\\/h2>', 'gi'),
-    new RegExp('<a[^>]+href=["\'](https?:\\/\\/[^"\']+|\\/[^"\']+)["\'][^>]*>\\s*<h2[^>]*>([\\s\\S]*?)<\\/h2>', 'gi'),
+    /<h2[^>]*>\s*<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>\s*<\/h2>/gi,
+    /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>\s*<h2[^>]*>([\s\S]*?)<\/h2>/gi,
   ]
 
   for (const linkRe of patterns) {
@@ -78,15 +77,15 @@ export function parseListingHtml(html, baseUrl, forceType, kind = null) {
   }
 
   if (results.length < 4) {
-    const aRe = new RegExp('<a[^>]+href=["\'](https?:\\/\\/[^"\']+|\\/[^"\']+)["\'][^>]*>([\\s\\S]*?)<\\/a>', 'gi')
+    const aRe = /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
     let m
     while ((m = aRe.exec(body)) !== null) {
       const text = stripTags(m[2] || '')
       if (!/ادامه|دانلود/i.test(text) && text.length < 8) continue
       const window = body.slice(Math.max(0, m.index - 1200), m.index + 50)
       const title =
-        match1(window, new RegExp('<h2[^>]*>\\s*<a[^>]*>([\\s\\S]*?)<\\/a>', 'i')) ||
-        match1(window, new RegExp('<h2[^>]*>([\\s\\S]*?)<\\/h2>', 'i')) ||
+        match1(window, /<h2[^>]*>\s*<a[^>]*>([\s\S]*?)<\/a>/i) ||
+        match1(window, /<h2[^>]*>([\s\S]*?)<\/h2>/i) ||
         text
       pushCard(results, seen, base, m[1], title, body, m.index, forceType, kind)
     }
@@ -107,7 +106,7 @@ function pushCard(results, seen, base, href, rawTitle, body, index, forceType, k
 
   const window = body.slice(Math.max(0, index - 400), index + 1000)
 
-  if ((forceType === 'movie' || kind === 'film') && new RegExp('قسمت\\s*\\d+\\s*از\\s*فصل|پایان\\s*فصل', 'i').test(window)) {
+  if ((forceType === 'movie' || kind === 'film') && /قسمت\s*\d+\s*از\s*فصل|پایان\s*فصل/i.test(window)) {
     return
   }
 
@@ -129,7 +128,7 @@ function pushCard(results, seen, base, href, rawTitle, body, index, forceType, k
 }
 
 function inferType(window, title) {
-  if (new RegExp('قسمت\\s*\\d+|فصل\\s*\\d+|سریال|انیمه', 'i').test(window + ' ' + title)) return 'series'
+  if (/قسمت\s*\d+|فصل\s*\d+|سریال|انیمه/i.test(window + ' ' + title)) return 'series'
   return 'movie'
 }
 
@@ -141,13 +140,13 @@ function parseListingHtmlKeepAll(html, baseUrl) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const results = []
   const seen = new Set()
-  const linkRe = new RegExp('<h2[^>]*>\\s*<a[^>]+href=["\'](https?:\\/\\/[^"\']+|\\/[^"\']+)["\'][^>]*>([\\s\\S]*?)<\\/a>\\s*<\\/h2>', 'gi')
+  const linkRe = /<h2[^>]*>\s*<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>\s*<\/h2>/gi
   let m
   while ((m = linkRe.exec(html)) !== null) {
     pushCard(results, seen, base, m[1], m[2], html, m.index, null, null)
   }
   if (results.length < 4) {
-    const aRe = new RegExp('<a[^>]+href=["\'](https?:\\/\\/[^"\']+|\\/[^"\']+)["\'][^>]*>([\\s\\S]*?)<\\/a>', 'gi')
+    const aRe = /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
     while ((m = aRe.exec(html)) !== null) {
       const title = cleanTitle(stripTags(m[2]))
       if (!title || title.length < 3) continue
@@ -161,17 +160,17 @@ function parseListingHtmlKeepAll(html, baseUrl) {
 export function parseDetailMeta(html, baseUrl) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const title =
-    match1(html, new RegExp('property=["\']og:title["\'][^>]*content=["\']([^"\']+)["\']', 'i')) ||
-    match1(html, new RegExp('<h1[^>]*>([\\s\\S]*?)<\\/h1>', 'i'))
+    match1(html, /property=["']og:title["'][^>]*content=["']([^"']+)["']/i) ||
+    match1(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i)
   const clean = title ? cleanTitle(stripTags(title)) : undefined
   const year = clean ? extractYear(clean) : extractYear(html.slice(0, 15000))
   const poster =
-    match1(html, new RegExp('property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']', 'i')) ||
-    match1(html, new RegExp('"thumbnailUrl"\\s*:\\s*"(https?:[^"\\\\]+)"', 'i'))
-  let description = match1(html, new RegExp('خلاصه\\s*داستان\\s*:?[\\s\\S]{0,20}?([\\s\\S]{40,800}?)(?:<|$)', 'i'))
+    match1(html, /property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
+    match1(html, /"thumbnailUrl"\s*:\s*"(https?:[^"\\]+)"/i)
+  let description = match1(html, /خلاصه\s*داستان\s*:?[\s\S]{0,20}?([\s\S]{40,800}?)(?:<|$)/i)
   if (description) description = stripTags(description).slice(0, 1200)
 
-  const isSeries = new RegExp('فصل\\s*\\d+|قسمت\\s*\\d+|season|episode', 'i').test(html.slice(0, 30000))
+  const isSeries = /فصل\s*\d+|قسمت\s*\d+|season|episode/i.test(html.slice(0, 30000))
 
   return {
     title: clean,
@@ -188,7 +187,7 @@ export function parseDetailStreams(html, baseUrl) {
   const seen = new Set()
 
   const sections = []
-  const secRe2 = new RegExp('فصل\\s*(\\d+)[^\\n<]{0,80}?(دوبله|زیرنویس)?[^\\n<]{0,40}?(2160|1080|720|480)', 'gi')
+  const secRe2 = /فصل\s*(\d+)[^\n<]{0,80}?(دوبله|زیرنویس)?[^\n<]{0,40}?(2160|1080|720|480)/gi
   let sm
   while ((sm = secRe2.exec(html)) !== null) {
     sections.push({
@@ -209,7 +208,7 @@ export function parseDetailStreams(html, baseUrl) {
     return best
   }
 
-  const aRe = new RegExp('<a[^>]+href=["\']([^"\']+)["\'][^>]*>([\\s\\S]*?)<\\/a>', 'gi')
+  const aRe = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
   let am
   while ((am = aRe.exec(html)) !== null) {
     const href = decodeHtml(am[1])
@@ -256,7 +255,7 @@ export function parseDetailStreams(html, baseUrl) {
 
     let seasonEp = extractSeasonEpisode(abs, localText)
     if (!seasonEp.episode) {
-      const epOnly = text.match(new RegExp('قسمت\\s*(\\d+)', 'i')) || localText.match(new RegExp('قسمت\\s*(\\d+)', 'i'))
+      const epOnly = text.match(/قسمت\s*(\d+)/i) || localText.match(/قسمت\s*(\d+)/i)
       if (epOnly) {
         seasonEp = {
           season: seasonEp.season || sec?.season || 1,
@@ -333,14 +332,14 @@ function extractSeasonEpisode(url, text) {
   if (m) return { season: Number(m[1]), episode: Number(m[2]) }
 
   const t = String(text || '')
-  const fa = t.match(new RegExp('فصل\\s*(\\d+)[\\s\\S]{0,50}?قسمت\\s*(\\d+)', 'i'))
+  const fa = t.match(/فصل\s*(\d+)[\s\S]{0,50}?قسمت\s*(\d+)/i)
   if (fa) {
     season = Number(fa[1])
     episode = Number(fa[2])
   } else {
-    const ep = t.match(new RegExp('قسمت\\s*(\\d+)', 'i'))
+    const ep = t.match(/قسمت\s*(\d+)/i)
     if (ep) episode = Number(ep[1])
-    const se = t.match(new RegExp('فصل\\s*(\\d+)', 'i'))
+    const se = t.match(/فصل\s*(\d+)/i)
     if (se) season = Number(se[1])
   }
   return { season, episode }
@@ -376,9 +375,9 @@ function isPlayableUrl(abs) {
 
 function extractPoster(htmlSlice, base) {
   const src =
-    match1(htmlSlice, /<img[^>]+src=["']([^"']+)["']/i) ||
-    match1(htmlSlice, /data-src=["']([^"']+)["']/i)
-  if (!src || /logo|icon|svg|avatar/i.test(src)) return undefined
+    match1(htmlSlice, /<img[^>]+(?:data-src|src)=["']([^"']+)["']/i) ||
+    match1(htmlSlice, /(?:data-src|src)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/i)
+  if (!src || /logo|icon|svg|avatar|placeholder|sprite/i.test(src)) return undefined
   return resolveUrl(base, src) || undefined
 }
 
@@ -389,10 +388,10 @@ function extractYear(text) {
 
 function cleanTitle(t) {
   return String(t)
-    .replace(new RegExp('دانلود\\s*(فیلم|سریال|انیمه)?', 'gi'), '')
-    .replace(new RegExp('بدون\\s*سانسور.*$', 'gi'), '')
-    .replace(new RegExp('با\\s*زیرنویس.*$', 'gi'), '')
-    .replace(new RegExp('–\\s*سینماتیک.*$', 'gi'), '')
+    .replace(/دانلود\s*(فیلم|سریال|انیمه)?/gi, '')
+    .replace(/بدون\s*سانسور.*$/gi, '')
+    .replace(/با\s*زیرنویس.*$/gi, '')
+    .replace(/–\s*سینماتیک.*$/gi, '')
     .replace(/\s+/g, ' ')
     .trim()
 }
