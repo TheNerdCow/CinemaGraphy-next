@@ -2,6 +2,12 @@
  * DigiMovie HTML parsers — digimoviez*.top WordPress theme.
  */
 
+const LRE = '\u202A'
+const PDF = '\u202C'
+function ltr(text) {
+  return `${LRE}${text}${PDF}`
+}
+
 const SECTION_ROOTS = new Set([
   'movies',
   'series',
@@ -31,24 +37,32 @@ const SECTION_ROOTS = new Set([
   'faq',
   'help',
   'app',
+  'application',
   'artists',
+  'artist',
   'news',
   'blog',
   'wishlist',
   'favorites',
+  'boxoffice',
+  'box-office',
+  'notifications',
+  'notification',
+  'announce',
+  'announcement',
 ])
 
 const NOISE_TITLE_RE =
-  /^(ورود|خروج|ثبت\s*نام|تماس(\s*با\s*ما)?|قوانین|DMCA(\s*POLICY)?|POLICY|CONTACT|Home|خانه|جستجو|Search|Login|Logout|APP|اپلیکیشن|هنرمندان|ARTISTS|لیست\s*علاقه(\s*مندی)?|باکس\s*آفیس|اخبار(\s*سینما)?(\s*و\s*هنرمندان)?|فیلم\s*برتر(\s*تاریخ)?\s*[۲۵2]50|سریال\s*برتر(\s*تاریخ)?\s*[۲۵2]50|Top\s*250)$/i
+  /^(ورود|خروج|ثبت\s*نام|تماس(\s*با\s*ما)?|قوانین|DMCA(\s*POLICY)?|POLICY|CONTACT|Home|خانه|جستجو|Search|Login|Logout|APP|اپلیکیشن|هنرمندان|ARTISTS|لیست\s*علاقه(\s*مندی)?|باکس\s*آفیس|Box\s*Office|اخبار(\s*سینما)?(\s*و\s*هنرمندان)?|فیلم\s*برتر(\s*تاریخ)?\s*[۲۵2]50|سریال\s*برتر(\s*تاریخ)?\s*[۲۵2]50|Top\s*250|اعلان(ات)?|Notifications?)$/i
 
 const NOISE_TITLE_IN =
-  /DMCA|CONTACT\s*US|تماس\s*با\s*ما|حریم\s*خصوصی|شرایط\s*استفاده|Privacy\s*Policy|Terms\s*of|برتر\s*تاریخ\s*[۲۵2]50|لیست\s*علاقه|اخبار\s*سینما|ARTISTS|هنرمندان|Top\s*250/i
+  /DMCA|CONTACT\s*US|تماس\s*با\s*ما|حریم\s*خصوصی|شرایط\s*استفاده|Privacy\s*Policy|Terms\s*of|برتر\s*تاریخ\s*[۲۵2]50|لیست\s*علاقه|اخبار\s*سینما|ARTISTS|هنرمندان|Top\s*250|باکس\s*آفیس|Box\s*Office|اعلان|Notification|منتشر\s*شد/i
 
 const EPISODE_TITLE_RE =
-  /^(قسمت\s*[\d\u06f0-\u06f9]+(\s*فصل\s*[\d\u06f0-\u06f9\w]+)?|فصل\s*[\d\u06f0-\u06f9]+(\s*قسمت\s*[\d\u06f0-\u06f9]+)?)$/i
+  /^(قسمت\s*[\d\u06f0-\u06f9]+(\s*فصل\s*[\d\u06f0-\u06f9\w]+)?|فصل\s*[\d\u06f0-\u06f9]+(\s*قسمت\s*[\d\u06f0-\u06f9]+)?)/i
 
 const NOISE_PATH_RE =
-  /\b(contact|dmca|policy|privacy|terms|about|faq|login|register|account|dashboard|artists?|app|top-?250|250movie|250series|news|blog|wishlist|favorites?)\b/i
+  /\b(contact|dmca|policy|privacy|terms|about|faq|login|register|account|dashboard|artists?|app|application|top-?250|250movie|250series|news|blog|wishlist|favorites?|box-?office|notifications?|announce)/i
 
 export function parseListingHtml(html, baseUrl, forceType) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
@@ -259,7 +273,9 @@ function isEpisodeTitle(title) {
   const t = String(title || '').trim()
   if (!t) return false
   if (EPISODE_TITLE_RE.test(t)) return true
-  if (/قسمت/.test(t) && /فصل/.test(t) && t.length < 40) return true
+  // «قسمت 6 فصل چهارم منتشر شد» — update cards, not titles
+  if (/قسمت/.test(t) && /فصل/.test(t)) return true
+  if (/منتشر\s*شد/.test(t) && (/قسمت|فصل/.test(t) || t.length < 50)) return true
   if (/^S\d+E\d+$/i.test(t)) return true
   return false
 }
@@ -303,26 +319,32 @@ function analyze(url, ctx) {
   }
 }
 
-/** Single-line + LRM — prevents RTL digit scramble in Nuvio/Stremio */
+/** Same multi-line layout as F2Media (Nuvio/Stremio friendly + LTR digits). */
 function formatLabel(info) {
-  const LRM = '\u200E'
-  const parts = []
-  parts.push(`${info.providerEmoji || '💎'} ${info.providerName || 'DigiMovie'}`)
-  const q = []
-  if (info.quality) q.push(info.quality)
-  if (info.source) q.push(info.source)
-  if (info.codec) q.push(info.codec)
-  if (info.bit10) q.push('10bit')
-  if (info.hdr) q.push('HDR')
-  if (q.length) parts.push(LRM + q.join(' '))
-  if (info.audio === 'sub') parts.push('زیرنویس چسبیده')
-  if (info.audio === 'dub') parts.push('دوبله فارسی')
-  if (info.size) parts.push(LRM + String(info.size))
-  if (info.encoder) parts.push(String(info.encoder))
-  if (info.season != null && info.episode != null) {
-    parts.push(LRM + `S${info.season}E${info.episode}`)
+  const lines = []
+  const emoji = info.providerEmoji || '💎'
+  const provider = info.providerName || 'DigiMovie'
+  lines.push(`${emoji} منبع: ${ltr(provider)}`)
+
+  const tech = []
+  if (info.quality) tech.push(String(info.quality))
+  if (info.hdr) tech.push('HDR')
+  if (info.bit10) tech.push('10bit')
+  if (info.source) tech.push(info.source)
+  if (info.codec) tech.push(info.codec)
+  if (tech.length) lines.push(`📊 کیفیت: ${ltr(tech.join(' · '))}`)
+
+  if (info.audio === 'sub') lines.push('📝 زیرنویس: زیرنویس چسبیده فارسی')
+  else if (info.audio === 'dub') lines.push('🎧 دوبله: دوبله فارسی')
+
+  if (info.encoder && !/^unknown$/i.test(info.encoder)) {
+    lines.push(`🎞️ انکدر: ${ltr(String(info.encoder))}`)
   }
-  return parts.join(' · ')
+  if (info.size) lines.push(`📦 سایز: ${ltr(String(info.size))}`)
+  if (info.season != null && info.episode != null) {
+    lines.push(ltr(`S${info.season}E${info.episode}`))
+  }
+  return lines.join('\n')
 }
 
 function qualityBadge(q) {
@@ -371,7 +393,7 @@ function isNoisePath(pagePath) {
   const segs = lower.split('/').filter(Boolean)
   if (!segs.length) return true
   if (NOISE_PATH_RE.test(lower)) return true
-  if (/برتر|علاقه|هنرمند|اخبار|تماس|قوانین/.test(decoded)) return true
+  if (/برتر|علاقه|هنرمند|اخبار|تماس|قوانین|باکس|اعلان|افیس/.test(decoded)) return true
   if (segs.length === 1 && SECTION_ROOTS.has(segs[0])) return true
   if (segs.length >= 2 && SECTION_ROOTS.has(segs[0]) && segs[1] === 'page') return true
   if (segs[0] === 'serie' && segs.length === 1) return true
@@ -432,6 +454,7 @@ function cleanTitle(t) {
     .replace(/دانلود\s*(فیلم|سریال|انیمیشن|انیمه)?/gi, '')
     .replace(/بدون\s*سانسور.*$/gi, '')
     .replace(/با\s*زیرنویس.*$/gi, '')
+    .replace(/منتشر\s*شد.*$/gi, '')
     .replace(/-\s*دیجی\s*موویز?.*$/gi, '')
     .replace(/\s+/g, ' ')
     .trim()
