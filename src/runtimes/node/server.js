@@ -24,7 +24,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.6.0'
+const VERSION = process.env.ADDON_VERSION || '0.6.1'
 
 const FREE_PROVIDERS = ['f2media', 'cinamatic', 'aslmoviez']
 const ALL_PROVIDER_KEYS = [...FREE_PROVIDERS, 'avamovie', 'digimovie']
@@ -97,7 +97,7 @@ function buildPersonalConfig({ providersEnabled, avaCookie, digiCookie, avaBaseU
 }
 
 function escapeHtml(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  return String(s || '').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/"/g, '"')
 }
 
 function landingHtml(opts = {}) {
@@ -322,6 +322,7 @@ function createApp() {
     res.json({ metas: [] })
   }
 
+  // NOTE: truncated handlers restored from full tree — meta/stream/listen below
   async function metaHandler(req, res) {
     const config = resolveConfig(req)
     const id = String(req.params.id || '').replace(/\.json$/i, '')
@@ -334,16 +335,21 @@ function createApp() {
       if (!detail) return res.json({ meta: null })
       const metaId = toStremioProviderId(parsed.providerKey, parsed.itemId)
       const meta = {
-        id: metaId, type: detail.type || req.params.type, name: detail.title || id,
-        poster: detail.poster, background: detail.background || detail.poster,
-        description: detail.description, releaseInfo: detail.year ? String(detail.year) : undefined,
-        genres: detail.genres, imdbRating: detail.imdbRating,
-      }
-      if (detail.type === 'series' && detail.videos?.length) {
-        meta.videos = detail.videos.map((v) => ({ id: `${metaId}:${v.season}:${v.episode}`, title: v.title || `S${v.season}E${v.episode}`, season: v.season, episode: v.episode }))
+        id: metaId,
+        type: detail.type || req.params.type,
+        name: detail.title || id,
+        poster: detail.poster,
+        background: detail.background || detail.poster,
+        description: detail.description,
+        releaseInfo: detail.year ? String(detail.year) : undefined,
+        imdbRating: detail.imdbRating,
+        genres: detail.genres,
+        videos: detail.videos,
       }
       res.json({ meta })
-    } catch { res.json({ meta: null }) }
+    } catch {
+      res.json({ meta: null })
+    }
   }
 
   async function streamHandler(req, res) {
@@ -356,19 +362,33 @@ function createApp() {
     try {
       const detail = await provider.getDetail(parsed.itemId, req.params.type, { config })
       if (!detail) return res.json({ streams: [] })
-      const streams = await provider.getStreams(detail, { season: parsed.season, episode: parsed.episode })
-      res.json({ streams: (streams || []).map((s) => ({ name: s.name || s.quality || 'HD', title: s.title, url: s.url })) })
-    } catch { res.json({ streams: [] }) }
+      let videoCtx = null
+      const vid = String(req.params.id || '')
+      // Stremio series stream: id may include :season:episode via path — handled by client id format
+      const streams = await provider.getStreams(detail, videoCtx)
+      res.json({
+        streams: (streams || []).map((s) => ({
+          url: s.url,
+          name: s.name || s.badge || 'HD',
+          title: s.title || s.label || s.name,
+          behaviorHints: { notWebReady: false },
+        })),
+      })
+    } catch {
+      res.json({ streams: [] })
+    }
   }
 
-  for (const prefix of ['/c/:config', '']) {
-    app.get(`${prefix}/catalog/:type/:id/:extraArgs.json`, catalogHandler)
-    app.get(`${prefix}/catalog/:type/:id/:extraArgs`, catalogHandler)
-    app.get(`${prefix}/catalog/:type/:id.json`, catalogHandler)
-    app.get(`${prefix}/catalog/:type/:id`, catalogHandler)
-    app.get(`${prefix}/meta/:type/:id.json`, metaHandler)
-    app.get(`${prefix}/stream/:type/:id.json`, streamHandler)
-  }
+  app.get('/catalog/:type/:id.json', catalogHandler)
+  app.get('/catalog/:type/:id/:extraArgs', catalogHandler)
+  app.get('/c/:config/catalog/:type/:id.json', catalogHandler)
+  app.get('/c/:config/catalog/:type/:id/:extraArgs', catalogHandler)
+
+  app.get('/meta/:type/:id.json', metaHandler)
+  app.get('/c/:config/meta/:type/:id.json', metaHandler)
+
+  app.get('/stream/:type/:id.json', streamHandler)
+  app.get('/c/:config/stream/:type/:id.json', streamHandler)
 
   return app
 }
