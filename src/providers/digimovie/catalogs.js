@@ -1,6 +1,6 @@
 /** DigiMovie editorial catalogs — cookie auth + rotatable base URL. */
 
-/** @typedef {{ id: string, type: 'movie'|'series', kind: string, nameFa: string, path: string }} DigiCatalog */
+/** @typedef {{ id: string, type: 'movie'|'series', kind: string, nameFa: string, path: string, altPaths?: string[] }} DigiCatalog */
 
 /** @type {DigiCatalog[]} */
 export const DIGI_CATALOGS = [
@@ -24,6 +24,10 @@ export const DIGI_CATALOGS = [
     kind: 'anime',
     nameFa: 'DigiMovie — انیمه',
     path: '/category/انیمه/',
+    altPaths: [
+      '/category/anime/',
+      '/category/انیمیشن/',
+    ],
   },
   {
     id: 'digimovie_korean',
@@ -31,6 +35,12 @@ export const DIGI_CATALOGS = [
     kind: 'korean',
     nameFa: 'DigiMovie — سریال کره‌ای',
     path: '/category/سریال-کره-ای/',
+    altPaths: [
+      '/category/korean/',
+      '/category/korean-series/',
+      '/category/کره-ای/',
+      '/category/سریال-کره/',
+    ],
   },
   {
     id: 'digimovie_indian',
@@ -38,44 +48,20 @@ export const DIGI_CATALOGS = [
     kind: 'indian',
     nameFa: 'DigiMovie — فیلم هندی',
     path: '/category/فیلم-هندی/',
+    altPaths: ['/category/indian/', '/category/هندی/'],
   },
 ]
 
 export const DIGI_MOVIE_GENRES = [
-  'اکشن',
-  'انیمیشن',
-  'بیوگرافی',
-  'ترسناک',
-  'جنایی',
-  'درام',
-  'کمدی',
-  'علمی تخیلی',
-  'فانتزی',
-  'ماجراجویی',
-  'معمایی',
-  'هیجان انگیز',
-  'عاشقانه',
-  'جنگی',
-  'مستند',
-  'خانوادگی',
-  'وسترن',
-  'ورزشی',
+  'اکشن', 'انیمیشن', 'بیوگرافی', 'ترسناک', 'جنایی', 'درام', 'کمدی',
+  'علمی تخیلی', 'فانتزی', 'ماجراجویی', 'معمایی', 'هیجان انگیز',
+  'عاشقانه', 'جنگی', 'مستند', 'خانوادگی', 'وسترن', 'ورزشی',
 ]
 
 export const DIGI_SERIES_GENRES = [
-  'اکشن',
-  'انیمیشن',
-  'ترسناک',
-  'جنایی',
-  'درام',
-  'کمدی',
-  'علمی تخیلی',
-  'فانتزی',
-  'ماجراجویی',
-  'معمایی',
-  'هیجان انگیز',
-  'عاشقانه',
-  'خانوادگی',
+  'اکشن', 'انیمیشن', 'ترسناک', 'جنایی', 'درام', 'کمدی',
+  'علمی تخیلی', 'فانتزی', 'ماجراجویی', 'معمایی', 'هیجان انگیز',
+  'عاشقانه', 'خانوادگی',
 ]
 
 export const DIGI_GENRE_SLUGS = {
@@ -99,10 +85,6 @@ export const DIGI_GENRE_SLUGS = {
   ورزشی: 'ورزشی',
 }
 
-/**
- * Must stay close to real items-per-page so Nuvio/Stremio skip maps to page N.
- * Digi archive pages are typically ~10–16 posts.
- */
 export const DIGI_PAGE_SIZE = 12
 
 export function getCatalogById(id) {
@@ -139,28 +121,43 @@ export function toManifestCatalogs() {
 
 export function catalogListUrl(base, catalog, page = 1) {
   const root = String(base).replace(/\/+$/, '')
-  let path = catalog.path.startsWith('/') ? catalog.path : `/${catalog.path}`
+  let path = catalog.path.startsWith('/') ? catalog.path : '/' + catalog.path
   if (page <= 1) {
     return root + (path.endsWith('/') ? path : path + '/')
   }
   const basePath = path.replace(/\/+$/, '')
-  return `${root}${basePath}/page/${page}/`
+  return root + basePath + '/page/' + page + '/'
 }
 
-/** Try several Digi genre URL shapes (theme differs by mirror). */
+export function catalogPathCandidates(catalog, page = 1) {
+  const paths = [catalog.path, ...(catalog.altPaths || [])]
+  const out = []
+  for (const p of paths) {
+    let path = p.startsWith('/') ? p : '/' + p
+    if (page <= 1) {
+      out.push(path.endsWith('/') || path.includes('?') ? path : path + '/')
+    } else {
+      const basePath = path.split('?')[0].replace(/\/+$/, '')
+      const qs = path.includes('?') ? '?' + path.split('?')[1] : ''
+      out.push(basePath + '/page/' + page + '/' + qs)
+    }
+  }
+  return out
+}
+
 export function genreListPaths(genreLabel, type, page = 1) {
   const slug = DIGI_GENRE_SLUGS[genreLabel] || genreLabel
   const encoded = encodeURI(slug)
-  const pageSuffix = page <= 1 ? '/' : `/page/${page}/`
+  const pageSuffix = page <= 1 ? '/' : '/page/' + page + '/'
   const paths = [
-    `/genre/${encoded}${pageSuffix}`,
-    `/category/${encoded}${pageSuffix}`,
-    `/tag/${encoded}${pageSuffix}`,
+    '/genre/' + encoded + pageSuffix,
+    '/category/' + encoded + pageSuffix,
+    '/tag/' + encoded + pageSuffix,
   ]
   if (type === 'series') {
-    paths.unshift(`/genre/${encoded}${pageSuffix}?archive_filter_type=series`)
+    paths.unshift('/genre/' + encoded + pageSuffix + '?archive_filter_type=series')
   } else if (type === 'movie') {
-    paths.unshift(`/genre/${encoded}${pageSuffix}?archive_filter_type=movie`)
+    paths.unshift('/genre/' + encoded + pageSuffix + '?archive_filter_type=movie')
   }
   return paths
 }

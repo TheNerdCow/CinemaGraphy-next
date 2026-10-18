@@ -1,8 +1,9 @@
 /**
  * F2Media editorial catalogs — order matches homepage rails.
+ * Search is attached to updated movies/series (no separate duplicate rails).
  */
 
-/** @typedef {{ id: string, type: 'movie'|'series', nameFa: string, nameEn: string, path: string, homeRail?: number }} F2Catalog */
+/** @typedef {{ id: string, type: 'movie'|'series', nameFa: string, nameEn: string, path: string, homeRail?: number, searchable?: boolean }} F2Catalog */
 
 /** @type {F2Catalog[]} */
 export const F2_CATALOGS = [
@@ -13,6 +14,7 @@ export const F2_CATALOGS = [
     nameEn: 'F2Media — Updated Movies',
     path: '/movies/',
     homeRail: 1,
+    searchable: true,
   },
   {
     id: 'f2media_series_updated',
@@ -21,6 +23,7 @@ export const F2_CATALOGS = [
     nameEn: 'F2Media — Updated Series',
     path: '/series/',
     homeRail: 2,
+    searchable: true,
   },
   {
     id: 'f2media_top_movies',
@@ -85,12 +88,18 @@ export function getCatalogById(id) {
 }
 
 export function toManifestCatalogs(lang = 'fa') {
-  return F2_CATALOGS.map((c) => ({
-    id: c.id,
-    type: c.type,
-    name: lang === 'en' ? c.nameEn : c.nameFa,
-    extra: [{ name: 'skip', isRequired: false }],
-  }))
+  return F2_CATALOGS.map((c) => {
+    const extra = [{ name: 'skip', isRequired: false }]
+    if (c.searchable) {
+      extra.unshift({ name: 'search', isRequired: false })
+    }
+    return {
+      id: c.id,
+      type: c.type,
+      name: lang === 'en' ? c.nameEn : c.nameFa,
+      extra,
+    }
+  })
 }
 
 export function catalogListUrl(base, catalog, page = 1) {
@@ -100,8 +109,8 @@ export function catalogListUrl(base, catalog, page = 1) {
   if (path.includes('?')) {
     const [p, qs] = path.split('?')
     const clean = p.endsWith('/') ? p : p + '/'
-    return `${root}${clean}page/${page}/?${qs}`
+    return root + clean + 'page/' + page + '/?' + qs
   }
   const clean = path.endsWith('/') ? path : path + '/'
-  return `${root}${clean}page/${page}/`
+  return root + clean + 'page/' + page + '/'
 }
