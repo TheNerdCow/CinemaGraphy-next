@@ -1,5 +1,6 @@
 /**
  * DigiMovie HTML parsers — digimoviez*.top WordPress theme.
+ * Listing: only main archive cards (article / item-movie), never sidebar widgets.
  */
 
 const LRE = '\u202A'
@@ -9,51 +10,13 @@ function ltr(text) {
 }
 
 const SECTION_ROOTS = new Set([
-  'movies',
-  'series',
-  'serie',
-  'category',
-  'genre',
-  'tag',
-  'account',
-  'dashboard',
-  'login',
-  'page',
-  'wp-admin',
-  'wp-content',
-  'wp-json',
-  'top-250',
-  'top250',
-  '250movie',
-  '250series',
-  'search',
-  'contact',
-  'contact-us',
-  'dmca',
-  'policy',
-  'privacy',
-  'terms',
-  'about',
-  'faq',
-  'help',
-  'app',
-  'application',
-  'artists',
-  'artist',
-  'cast',
-  'casts',
-  'actor',
-  'actors',
-  'news',
-  'blog',
-  'wishlist',
-  'favorites',
-  'boxoffice',
-  'box-office',
-  'notifications',
-  'notification',
-  'announce',
-  'announcement',
+  'movies', 'series', 'serie', 'category', 'genre', 'tag', 'account',
+  'dashboard', 'login', 'page', 'wp-admin', 'wp-content', 'wp-json',
+  'top-250', 'top250', '250movie', '250series', 'search', 'contact',
+  'contact-us', 'dmca', 'policy', 'privacy', 'terms', 'about', 'faq',
+  'help', 'app', 'application', 'artists', 'artist', 'cast', 'casts',
+  'actor', 'actors', 'news', 'blog', 'wishlist', 'favorites', 'boxoffice',
+  'box-office', 'notifications', 'notification', 'announce', 'announcement',
 ])
 
 const NOISE_TITLE_RE =
@@ -68,72 +31,156 @@ const EPISODE_TITLE_RE =
 const NOISE_PATH_RE =
   /\b(contact|dmca|policy|privacy|terms|about|faq|login|register|account|dashboard|artists?|cast|casts|actors?|app|application|top-?250|250movie|250series|news|blog|wishlist|favorites?|box-?office|notifications?|announce)/i
 
-export function parseListingHtml(html, baseUrl, forceType) {
-  const base = String(baseUrl || '').replace(/\/+$/, '')
-  const results = []
-  const seen = new Set()
+/** Strip sidebars/widgets so we only see the main archive grid. */
+function listingScope(html) {
+  let h = String(html || '')
+  h = h.replace(/<aside[\s\S]*?<\/aside>/gi, ' ')
+  h = h.replace(/<div[^>]+class=["'][^"']*(?:sidebar|widget|side-bar|off-canvas|secondary)[^"']*["'][\s\S]*?<\/div>/gi, ' ')
+  h = h.replace(/id=["'](?:sidebar|secondary|widgets?)["'][\s\S]{0,80000}/gi, ' ')
 
-  let scope = html
   const main =
-    html.match(/<main[\s\S]*?<\/main>/i) ||
-    html.match(
-      /class="[^"]*(?:archive|content-area|site-main|movies_list|post-listing|posts-container)[^"]*"[\s\S]{0,300000}/i,
-    )
-  if (main) scope = main[0]
+    h.match(/<main[\s\S]*?<\/main>/i) ||
+    h.match(/class=["'][^"']*(?:archive|content-area|site-main|movies_list|post-listing|posts-container|main-content)[^"']*["'][\s\S]{0,400000}/i)
+  if (main) return main[0]
+  return h
+}
 
-  const linkRe =
-    /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*(?:title=["']([^"']*)["'])?[^>]*>([\s\S]*?)<\/a>/gi
+function extractCards(scope) {
+  const cards = []
+  const re =
+    /<(?:article|div)[^>]+class=["'][^"']*(?:item-movie|movie-item|post-\d|type-post|type-movie|item\s|movie_item|film-item|series-item)[^"']*["'][^>]*>[\s\S]{80,6000}?<\/(?:article|div)>/gi
   let m
-  while ((m = linkRe.exec(scope)) !== null) {
-    const abs = resolveUrl(base, m[1])
-    if (!abs || !sameHostFamily(abs, base)) continue
+  while ((m = re.exec(scope)) !== null) {
+    cards.push(m[0])
+    if (cards.length >= 40) break
+  }
+  if (cards.length < 4) {
+    const aRe = /<article[\s\S]{80,6000}?<\/article>/gi
+    while ((m = aRe.exec(scope)) !== null) {
+      cards.push(m[0])
+      if (cards.length >= 40) break
+    }
+  }
+  return cards
+}
 
+function cardToItem(card, base, forceType, seen) {
+  const links = []
+  const aRe = /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*(?:title=["']([^"']*)["'])?[^>]*>([\s\S]*?)<\/a>/gi
+  let m
+  while ((m = aRe.exec(card)) !== null) {
+    links.push({ href: m[1], titleAttr: m[2] || '', inner: m[3] || '', index: m.index })
+  }
+  if (!links.length) return null
+
+  let chosen = null
+  for (const L of links) {
+    const abs = resolveUrl(base, L.href)
+    if (!abs || !sameHostFamily(abs, base)) continue
     let pagePath = pathFromUrl(abs)
     if (!pagePath || isNoisePath(pagePath)) continue
-
     pagePath = normalizeDetailPath(pagePath)
     if (!pagePath || seen.has(pagePath) || isNoisePath(pagePath)) continue
     if (!isLikelyDetailPath(pagePath, forceType)) continue
+    chosen = { ...L, abs, pagePath }
+    break
+  }
+  if (!chosen) return null
 
-    let title =
-      cleanTitle(m[2] || '') ||
-      cleanTitle(stripTags(m[3] || '')) ||
-      ''
+  let title =
+    cleanTitle(chosen.titleAttr) ||
+    cleanTitle(stripTags(chosen.inner)) ||
+    ''
+  if (!title || isNoiseTitle(title) || isEpisodeTitle(title)) {
+    const fromPath = titleFromPath(chosen.pagePath)
+    if (fromPath && !isNoiseTitle(fromPath) && !isEpisodeTitle(fromPath)) title = fromPath
+  }
+  if (!title || title.length < 2 || isNoiseTitle(title) || isEpisodeTitle(title)) return null
 
-    if (!title || isNoiseTitle(title) || isEpisodeTitle(title)) {
-      const fromPath = titleFromPath(pagePath)
-      if (fromPath && !isNoiseTitle(fromPath) && !isEpisodeTitle(fromPath)) {
-        title = fromPath
+  if (forceType === 'series' && !/^serie\//i.test(chosen.pagePath)) return null
+  if (forceType === 'movie' && /^serie\//i.test(chosen.pagePath)) return null
+
+  let poster =
+    match1(card, /(?:data-src|src)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/i) ||
+    match1(card, /background-image:\s*url\(([^)]+)\)/i)
+  if (poster) {
+    poster = poster.replace(/^['"]|['"]$/g, '').trim()
+    poster = resolveUrl(base, poster) || poster
+    if (/svg|icon|logo|sprite|avatar|placeholder/i.test(poster)) poster = undefined
+  }
+
+  const type = forceType || (/^serie\//i.test(chosen.pagePath) ? 'series' : 'movie')
+  seen.add(chosen.pagePath)
+  return {
+    itemId: encodePageId(chosen.pagePath),
+    title,
+    year: extractYear(title) || extractYear(chosen.pagePath),
+    type,
+    poster: poster || undefined,
+    pagePath: chosen.pagePath,
+  }
+}
+
+export function parseListingHtml(html, baseUrl, forceType) {
+  const base = String(baseUrl || '').replace(/\/+$/, '')
+  const scope = listingScope(html)
+  const seen = new Set()
+  const results = []
+
+  const cards = extractCards(scope)
+  for (const card of cards) {
+    const item = cardToItem(card, base, forceType, seen)
+    if (item) {
+      results.push(item)
+      if (results.length >= 24) break
+    }
+  }
+
+  if (results.length < 4) {
+    const linkRe =
+      /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*(?:title=["']([^"']*)["'])?[^>]*>([\s\S]*?)<\/a>/gi
+    let m
+    while ((m = linkRe.exec(scope)) !== null) {
+      const abs = resolveUrl(base, m[1])
+      if (!abs || !sameHostFamily(abs, base)) continue
+      let pagePath = pathFromUrl(abs)
+      if (!pagePath || isNoisePath(pagePath)) continue
+      pagePath = normalizeDetailPath(pagePath)
+      if (!pagePath || seen.has(pagePath) || isNoisePath(pagePath)) continue
+      if (!isLikelyDetailPath(pagePath, forceType)) continue
+
+      let title = cleanTitle(m[2] || '') || cleanTitle(stripTags(m[3] || '')) || ''
+      if (!title || isNoiseTitle(title) || isEpisodeTitle(title)) {
+        const fromPath = titleFromPath(pagePath)
+        if (fromPath && !isNoiseTitle(fromPath) && !isEpisodeTitle(fromPath)) title = fromPath
       }
+      if (!title || title.length < 2 || isNoiseTitle(title) || isEpisodeTitle(title)) continue
+      if (forceType === 'series' && !/^serie\//i.test(pagePath)) continue
+      if (forceType === 'movie' && /^serie\//i.test(pagePath)) continue
+
+      const start = Math.max(0, m.index - 600)
+      const slice = scope.slice(start, m.index + m[0].length + 200)
+      let poster =
+        match1(slice, /(?:data-src|src)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/i) ||
+        match1(slice, /background-image:\s*url\(([^)]+)\)/i)
+      if (poster) {
+        poster = poster.replace(/^['"]|['"]$/g, '').trim()
+        poster = resolveUrl(base, poster) || poster
+        if (/svg|icon|logo|sprite|avatar|placeholder/i.test(poster)) poster = undefined
+      }
+
+      const type = forceType || (/^serie\//i.test(pagePath) ? 'series' : 'movie')
+      seen.add(pagePath)
+      results.push({
+        itemId: encodePageId(pagePath),
+        title,
+        year: extractYear(title) || extractYear(pagePath),
+        type,
+        poster: poster || undefined,
+        pagePath,
+      })
+      if (results.length >= 24) break
     }
-    if (!title || title.length < 2 || isNoiseTitle(title) || isEpisodeTitle(title)) continue
-
-    const start = Math.max(0, m.index - 900)
-    const slice = scope.slice(start, m.index + m[0].length + 200)
-    let poster =
-      match1(slice, /(?:data-src|src)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/i) ||
-      match1(slice, /background-image:\s*url\(([^)]+)\)/i)
-    if (poster) {
-      poster = poster.replace(/^['"]|['"]$/g, '').trim()
-      poster = resolveUrl(base, poster) || poster
-      if (/svg|icon|logo|sprite|avatar|placeholder/i.test(poster)) poster = undefined
-    }
-
-    const type = forceType || (/^serie\//i.test(pagePath) ? 'series' : 'movie')
-
-    if (forceType === 'series' && !/^serie\//i.test(pagePath)) continue
-    if (forceType === 'movie' && /^serie\//i.test(pagePath)) continue
-
-    seen.add(pagePath)
-    results.push({
-      itemId: encodePageId(pagePath),
-      title,
-      year: extractYear(title) || extractYear(pagePath),
-      type,
-      poster: poster || undefined,
-      pagePath,
-    })
-    if (results.length >= 60) break
   }
 
   return results
@@ -322,7 +369,6 @@ function analyze(url, ctx) {
   }
 }
 
-/** Same multi-line layout as F2Media (Nuvio/Stremio friendly + LTR digits). */
 function formatLabel(info) {
   const lines = []
   const emoji = info.providerEmoji || '🎬'
@@ -469,8 +515,8 @@ function stripTags(s) {
   return String(s)
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
-    .replace(/&/g, '&')
-    .replace(/"/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, ' ')
     .trim()
@@ -478,8 +524,8 @@ function stripTags(s) {
 
 function decodeHtml(s) {
   return String(s)
-    .replace(/&/g, '&')
-    .replace(/"/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
 }
 
