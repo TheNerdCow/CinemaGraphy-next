@@ -1,6 +1,6 @@
 /**
  * DigiMovie HTML parsers — digimoviez*.top WordPress theme.
- * Listing: only main archive cards (article / item-movie), never sidebar widgets.
+ * Listing: main archive cards only. Reject sidebar "منتشر شد" episode tiles.
  */
 
 const LRE = '\u202A'
@@ -17,10 +17,11 @@ const SECTION_ROOTS = new Set([
   'help', 'app', 'application', 'artists', 'artist', 'cast', 'casts',
   'actor', 'actors', 'news', 'blog', 'wishlist', 'favorites', 'boxoffice',
   'box-office', 'notifications', 'notification', 'announce', 'announcement',
+  'trailer', 'trailers',
 ])
 
 const NOISE_TITLE_RE =
-  /^(ورود|خروج|ثبت\s*نام|تماس(\s*با\s*ما)?|قوانین|DMCA(\s*POLICY)?|POLICY|CONTACT|Home|خانه|جستجو|Search|Login|Logout|APP|اپلیکیشن|هنرمندان|بازیگران|ARTISTS|Cast|لیست\s*علاقه(\s*مندی)?|باکس\s*آفیس|Box\s*Office|اخبار(\s*سینما)?(\s*و\s*هنرمندان)?|فیلم\s*برتر(\s*تاریخ)?\s*[۲۵2]50|سریال\s*برتر(\s*تاریخ)?\s*[۲۵2]50|Top\s*250|اعلان(ات)?|Notifications?)$/i
+  /^(ورود|خروج|ثبت\s*نام|تماس(\s*با\s*ما)?|قوانین|DMCA(\s*POLICY)?|POLICY|CONTACT|Home|خانه|جستجو|Search|Login|Logout|APP|اپلیکیشن|هنرمندان|بازیگران|ARTISTS|Cast|لیست\s*علاقه(\s*مندی)?|باکس\s*آفیس|Box\s*Office|اخبار(\s*سینما)?(\s*و\s*هنرمندان)?|فیلم\s*برتر(\s*تاریخ)?\s*[۲۵2]50|سریال\s*برتر(\s*تاریخ)?\s*[۲۵2]50|Top\s*250|اعلان(ات)?|Notifications?|جدیدترین|محبوب‌?ترین|سریال‌?های\s*جدید)$/i
 
 const NOISE_TITLE_IN =
   /DMCA|CONTACT\s*US|تماس\s*با\s*ما|حریم\s*خصوصی|شرایط\s*استفاده|Privacy\s*Policy|Terms\s*of|برتر\s*تاریخ\s*[۲۵2]50|لیست\s*علاقه|اخبار\s*سینما|ARTISTS|هنرمندان|بازیگران|\bCast\b|Top\s*250|باکس\s*آفیس|Box\s*Office|اعلان|Notification|منتشر\s*شد/i
@@ -28,19 +29,25 @@ const NOISE_TITLE_IN =
 const EPISODE_TITLE_RE =
   /^(قسمت\s*[\d\u06f0-\u06f9]+(\s*فصل\s*[\d\u06f0-\u06f9\w]+)?|فصل\s*[\d\u06f0-\u06f9]+(\s*قسمت\s*[\d\u06f0-\u06f9]+)?)/i
 
-const NOISE_PATH_RE =
-  /\b(contact|dmca|policy|privacy|terms|about|faq|login|register|account|dashboard|artists?|cast|casts|actors?|app|application|top-?250|250movie|250series|news|blog|wishlist|favorites?|box-?office|notifications?|announce)/i
+/** Sidebar "new episode" tiles: قسمت N فصل … با زیرنویس منتشر شد */
+const EPISODE_UPDATE_CARD_RE =
+  /قسمت\s*[\d\u06f0-\u06f9]+[\s\S]{0,40}?(فصل|زیرنویس|منتشر)|فصل\s*[\d\u06f0-\u06f9]+[\s\S]{0,40}?(قسمت|زیرنویس|منتشر)|منتشر\s*شد/i
 
-/** Strip sidebars/widgets so we only see the main archive grid. */
+const NOISE_PATH_RE =
+  /\b(contact|dmca|policy|privacy|terms|about|faq|login|register|account|dashboard|artists?|cast|casts|actors?|app|application|top-?250|250movie|250series|news|blog|wishlist|favorites?|box-?office|notifications?|announce|trailer)/i
+
 function listingScope(html) {
   let h = String(html || '')
   h = h.replace(/<aside[\s\S]*?<\/aside>/gi, ' ')
-  h = h.replace(/<div[^>]+class=["'][^"']*(?:sidebar|widget|side-bar|off-canvas|secondary)[^"']*["'][\s\S]*?<\/div>/gi, ' ')
-  h = h.replace(/id=["'](?:sidebar|secondary|widgets?)["'][\s\S]{0,80000}/gi, ' ')
+  h = h.replace(/<(?:div|section)[^>]+class=["'][^"']*(?:sidebar|widget|side-bar|off-canvas|secondary|side_bar|side-panel|sticky-side|home-side|latest-side)[^"']*["'][\s\S]*?<\/(?:div|section)>/gi, ' ')
+  h = h.replace(/id=["'](?:sidebar|secondary|widgets?|side)["'][\s\S]{0,120000}/gi, ' ')
+  h = h.replace(/سریال[‌\s]*های\s*(جدید|محبوب)[\s\S]{0,30000}?(?=<main|class=["'][^"']*archive|<\/body>)/gi, ' ')
+  h = h.replace(/فیلم[‌\s]*های\s*(جدید|محبوب)[\s\S]{0,20000}?(?=<main|class=["'][^"']*archive|<\/body>)/gi, ' ')
+  h = h.replace(/تریلی?ر[\s\S]{0,15000}?(?=<main|class=["'][^"']*archive|<\/body>)/gi, ' ')
 
   const main =
     h.match(/<main[\s\S]*?<\/main>/i) ||
-    h.match(/class=["'][^"']*(?:archive|content-area|site-main|movies_list|post-listing|posts-container|main-content)[^"']*["'][\s\S]{0,400000}/i)
+    h.match(/class=["'][^"']*(?:archive|content-area|site-main|movies_list|post-listing|posts-container|main-content|primary)[^"']*["'][\s\S]{0,400000}/i)
   if (main) return main[0]
   return h
 }
@@ -64,7 +71,18 @@ function extractCards(scope) {
   return cards
 }
 
+function isEpisodeUpdateCard(cardHtml) {
+  const plain = stripTags(cardHtml)
+  if (EPISODE_UPDATE_CARD_RE.test(plain)) {
+    if (/منتشر\s*شد/i.test(plain) && /قسمت|فصل/i.test(plain)) return true
+    if (/قسمت\s*[\d\u06f0-\u06f9]+.*فصل/i.test(plain) && plain.length < 180) return true
+  }
+  return false
+}
+
 function cardToItem(card, base, forceType, seen) {
+  if (isEpisodeUpdateCard(card)) return null
+
   const links = []
   const aRe = /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*(?:title=["']([^"']*)["'])?[^>]*>([\s\S]*?)<\/a>/gi
   let m
@@ -149,6 +167,10 @@ export function parseListingHtml(html, baseUrl, forceType) {
       if (!pagePath || seen.has(pagePath) || isNoisePath(pagePath)) continue
       if (!isLikelyDetailPath(pagePath, forceType)) continue
 
+      const start = Math.max(0, m.index - 400)
+      const slice = scope.slice(start, m.index + m[0].length + 250)
+      if (isEpisodeUpdateCard(slice)) continue
+
       let title = cleanTitle(m[2] || '') || cleanTitle(stripTags(m[3] || '')) || ''
       if (!title || isNoiseTitle(title) || isEpisodeTitle(title)) {
         const fromPath = titleFromPath(pagePath)
@@ -158,8 +180,6 @@ export function parseListingHtml(html, baseUrl, forceType) {
       if (forceType === 'series' && !/^serie\//i.test(pagePath)) continue
       if (forceType === 'movie' && /^serie\//i.test(pagePath)) continue
 
-      const start = Math.max(0, m.index - 600)
-      const slice = scope.slice(start, m.index + m[0].length + 200)
       let poster =
         match1(slice, /(?:data-src|src)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/i) ||
         match1(slice, /background-image:\s*url\(([^)]+)\)/i)
@@ -442,7 +462,7 @@ function isNoisePath(pagePath) {
   const segs = lower.split('/').filter(Boolean)
   if (!segs.length) return true
   if (NOISE_PATH_RE.test(lower)) return true
-  if (/برتر|علاقه|هنرمند|بازیگر|اخبار|تماس|قوانین|باکس|اعلان|افیس|\bcast\b/.test(decoded)) {
+  if (/برتر|علاقه|هنرمند|بازیگر|اخبار|تماس|قوانین|باکس|اعلان|افیس|\bcast\b|تریلی?ر/.test(decoded)) {
     return true
   }
   if (segs.length === 1 && SECTION_ROOTS.has(segs[0])) return true
@@ -506,6 +526,8 @@ function cleanTitle(t) {
     .replace(/بدون\s*سانسور.*$/gi, '')
     .replace(/با\s*زیرنویس.*$/gi, '')
     .replace(/منتشر\s*شد.*$/gi, '')
+    .replace(/قسمت\s*[\d\u06f0-\u06f9]+.*$/gi, '')
+    .replace(/فصل\s*[\d\u06f0-\u06f9]+.*$/gi, '')
     .replace(/-\s*دیجی\s*موویز?.*$/gi, '')
     .replace(/\s+/g, ' ')
     .trim()
