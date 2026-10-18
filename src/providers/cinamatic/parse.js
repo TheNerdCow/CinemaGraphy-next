@@ -2,7 +2,8 @@
  * Cinamatic (cinamatic.top) HTML parsers.
  * Paths: /YYYY/MM/DD/slug/ — WordPress date permalinks.
  * Listing: strip shared hero, keep only the matching category body.
- * Clean regex (literal patterns — no double-escape).
+ * Restored clean (no double-escaped regex). providerEmoji 🎬
+ * Poster: wider window + data-src/lazy/original candidates.
  */
 
 import {
@@ -104,7 +105,7 @@ function pushCard(results, seen, base, href, rawTitle, body, index, forceType, k
   if (!title || title.length < 2) return
   if (/^(ادامه|دانلود|مشاهده|تریلر|ورود|عضویت|برترین)/i.test(title)) return
 
-  const window = body.slice(Math.max(0, index - 400), index + 1000)
+  const window = body.slice(Math.max(0, index - 1400), index + 2000)
 
   if ((forceType === 'movie' || kind === 'film') && /قسمت\s*\d+\s*از\s*فصل|پایان\s*فصل/i.test(window)) {
     return
@@ -374,11 +375,22 @@ function isPlayableUrl(abs) {
 }
 
 function extractPoster(htmlSlice, base) {
-  const src =
-    match1(htmlSlice, /<img[^>]+(?:data-src|src)=["']([^"']+)["']/i) ||
-    match1(htmlSlice, /(?:data-src|src)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/i)
-  if (!src || /logo|icon|svg|avatar|placeholder|sprite/i.test(src)) return undefined
-  return resolveUrl(base, src) || undefined
+  const candidates = []
+  const re = /(?:data-src|data-lazy-src|data-original|src)=["']([^"']+)["']/gi
+  let m
+  while ((m = re.exec(String(htmlSlice || ''))) !== null) {
+    candidates.push(m[1])
+  }
+  const bg = match1(htmlSlice, /background-image:\s*url\(["']?([^"')]+)["']?\)/i)
+  if (bg) candidates.push(bg)
+  for (const src of candidates) {
+    if (!src) continue
+    if (!/\.(jpe?g|png|webp)/i.test(src) && !/wp-content\/uploads/i.test(src)) continue
+    if (/logo|icon|svg|avatar|placeholder|sprite|emoji|button|badge/i.test(src)) continue
+    const abs = resolveUrl(base, src)
+    if (abs) return abs
+  }
+  return undefined
 }
 
 function extractYear(text) {
