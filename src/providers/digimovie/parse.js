@@ -1,7 +1,7 @@
 /**
  * DigiMovie HTML parsers — digimoviez*.top WordPress theme.
  * Listing: main archive cards only. Reject sidebar episode tiles + dubbed promo rail.
- * Streams: size unit-first (GB 1.34 / MB 450) + series quality-group inheritance.
+ * Streams: size unit-first (GB 1.34 / MB 450) + propagate size/encoder to all eps in quality group.
  */
 
 const LRE = '\u202A'
@@ -242,18 +242,16 @@ export function parseDetailStreams(html, baseUrl) {
   const out = []
   const seen = new Set()
 
-  // Quality-group headers on Digi series pages carry size/encoder once for all eps
-  // e.g. "1080p WEB-DL SoftSub · Encoder : DigiMoviez · MB 450 · فصل 1"
   const sections = []
   const headerRe =
-    /(2160p|1080p|720p|480p)[^\n<]{0,120}?(WEB-?DL|WEBRip|BluRay|HDRip)?[^\n<]{0,80}?(SoftSub|HardSub|دوبله)?/gi
+    /(2160p|1080p|720p|480p|360p)[^\n<]{0,160}?(WEB-?DL|WEBRip|BluRay|HDRip|BRRip)?[^\n<]{0,100}?(SoftSub|HardSub|دوبله|Dubbed)?/gi
   let hm
   while ((hm = headerRe.exec(html)) !== null) {
-    const window = html.slice(Math.max(0, hm.index - 80), hm.index + 500)
+    const window = html.slice(Math.max(0, hm.index - 100), hm.index + 800)
     const plain = stripTags(window)
     sections.push({
       index: hm.index,
-      quality: hm[1] ? hm[1].toLowerCase() : null,
+      quality: hm[1] ? hm[1].toLowerCase().replace(/p$/i, '') + 'p' : null,
       source: hm[2] ? String(hm[2]).replace(/WEBDL/i, 'WEB-DL') : null,
       audio: /دوبله|Dubbed/i.test(plain)
         ? 'dub'
@@ -290,17 +288,24 @@ export function parseDetailStreams(html, baseUrl) {
     if (seen.has(href)) continue
     seen.add(href)
 
-    const start = Math.max(0, am.index - 900)
-    const local = html.slice(start, am.index + am[0].length + 120)
+    const start = Math.max(0, am.index - 1200)
+    const local = html.slice(start, am.index + am[0].length + 200)
     const localText = stripTags(local) + ' ' + href
     const info = analyze(href, localText)
     const sec = sectionAt(am.index)
 
-    if (!info.size && sec?.size) info.size = sec.size
+    if (sec?.size) info.size = sec.size
+    else if (!info.size) info.size = extractSize(localText)
     if (!info.quality && sec?.quality) info.quality = sec.quality
     if (!info.source && sec?.source) info.source = sec.source
     if (!info.audio && sec?.audio) info.audio = sec.audio
-    if (!info.encoder && sec?.encoder) info.encoder = sec.encoder
+    if (sec?.encoder) info.encoder = sec.encoder
+    else if (!info.encoder) {
+      info.encoder =
+        match1(localText, /Encoder\s*[:=]\s*([A-Za-z0-9._-]+)/i) ||
+        match1(localText, /(DigiMoviez?)/i) ||
+        info.encoder
+    }
 
     const se = href.match(/[Ss]0?(\d+)[Ee]0?(\d+)/)
     if (se) {
@@ -317,9 +322,14 @@ export function parseDetailStreams(html, baseUrl) {
     out.push({
       url: href,
       ...info,
-      label: formatLabel(info),
       badge: qualityBadge(info.quality),
     })
+  }
+
+  propagateGroupMeta(out)
+
+  for (const s of out) {
+    s.label = formatLabel(s)
   }
 
   const rank = (s) => {
@@ -328,6 +338,34 @@ export function parseDetailStreams(html, baseUrl) {
   }
   out.sort((a, b) => rank(b) - rank(a))
   return out
+}
+
+/** Same quality+source+audio(+season) → share size & encoder across all streams. */
+function propagateGroupMeta(streams) {
+  const groups = new Map()
+  for (const s of streams) {
+    const key = [
+      String(s.quality || '').toLowerCase(),
+      String(s.source || '').toLowerCase(),
+      String(s.audio || ''),
+      s.season != null ? String(s.season) : '',
+      String(s.codec || ''),
+    ].join('|')
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(s)
+  }
+  for (const list of groups.values()) {
+    const size = list.find((x) => x.size)?.size
+    const encoder = list.find((x) => x.encoder)?.encoder
+    const source = list.find((x) => x.source)?.source
+    const quality = list.find((x) => x.quality)?.quality
+    for (const s of list) {
+      if (!s.size && size) s.size = size
+      if (!s.encoder && encoder) s.encoder = encoder
+      if (!s.source && source) s.source = source
+      if (!s.quality && quality) s.quality = quality
+    }
+  }
 }
 
 export function buildSeriesVideos(streams) {
