@@ -1,6 +1,5 @@
 /**
  * DigiMovie provider — subscription / cookie session.
- * Domain rotates (digimoviez53.top, digimoviez.com, …) → baseUrl is configurable.
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
@@ -23,7 +22,7 @@ import {
   getCatalogById,
   toManifestCatalogs,
   catalogListUrl,
-  genreListUrl,
+  genreListPaths,
   DIGI_PAGE_SIZE,
 } from './catalogs.js'
 
@@ -141,6 +140,15 @@ export function createDigiMovieProvider(deps = {}) {
     throw err
   }
 
+  /**
+   * skip → WP page. If client advances by returned count (not PAGE_SIZE),
+   * still progress when skip grows past previous page window.
+   */
+  function pageFromSkip(skip) {
+    const s = Math.max(0, Number(skip) || 0)
+    return Math.floor(s / PAGE_SIZE) + 1
+  }
+
   async function lookupImages(title, year, type) {
     if (!title) return {}
     const clean = String(title).replace(/\s+/g, ' ').trim()
@@ -216,13 +224,9 @@ export function createDigiMovieProvider(deps = {}) {
       const q = String(query || '').trim()
       if (!q) return []
       const config = ctx.config || {}
-      if (!cookieOf(config)) {
-        logger.warn?.('digimovie search skipped — no cookie')
-        return []
-      }
-      const skip = Number(ctx.skip) || 0
-      const page = Math.floor(skip / PAGE_SIZE) + 1
-      const cacheKey = `digi-search:${q.toLowerCase()}:${page}`
+      if (!cookieOf(config)) return []
+      const page = pageFromSkip(ctx.skip)
+      const cacheKey = `digi-search-v2:${q.toLowerCase()}:${page}`
       const hit = cache.get(cacheKey)
       if (Array.isArray(hit) && hit.length) return hit
 
@@ -238,10 +242,7 @@ export function createDigiMovieProvider(deps = {}) {
         logger.info?.('digimovie search', { q, page, count: items.length, base })
         return items
       } catch (err) {
-        logger.warn?.('digimovie search failed', {
-          message: err.message,
-          attempts: err.attempts,
-        })
+        logger.warn?.('digimovie search failed', { message: err.message })
         return []
       }
     },
@@ -254,33 +255,35 @@ export function createDigiMovieProvider(deps = {}) {
     async browseGenre(type, genre, ctx = {}) {
       const config = ctx.config || {}
       if (!cookieOf(config)) return []
-      const skip = Number(ctx.skip) || 0
-      const page = Math.floor(skip / PAGE_SIZE) + 1
+      const page = pageFromSkip(ctx.skip)
       const want = type === 'series' ? 'series' : 'movie'
-      const cacheKey = `digi-genre:${want}:${genre}:${page}`
+      const cacheKey = `digi-genre-v2:${want}:${genre}:${page}`
       const hit = cache.get(cacheKey)
       if (Array.isArray(hit) && hit.length) return hit
-      try {
-        const dummy = 'https://host.invalid'
-        const full = genreListUrl(dummy, genre, want, page)
-        const listPath = full.replace(dummy, '')
-        const { html, base } = await fetchHtml(listPath, config, ctx.timeoutMs || 22_000, 'list')
-        let parsed = parseListingHtml(html, base, want)
-        parsed = parsed.map((it) => ({ ...it, type: want }))
-        const items = mapItems(parsed)
-        await enrichListMissingPosters(items, 18)
-        cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
-        return items
-      } catch (err) {
-        logger.warn?.('digimovie genre failed', { genre, message: err.message })
-        return []
+
+      const paths = genreListPaths(genre, want, page)
+      for (const listPath of paths) {
+        try {
+          const { html, base } = await fetchHtml(listPath, config, ctx.timeoutMs || 22_000, 'list')
+          let parsed = parseListingHtml(html, base, want)
+          parsed = parsed.map((it) => ({ ...it, type: want }))
+          const items = mapItems(parsed)
+          if (!items.length) continue
+          await enrichListMissingPosters(items, 18)
+          cache.set(cacheKey, items, CACHE_LIST_MS)
+          logger.info?.('digimovie genre', { genre, page, path: listPath, count: items.length })
+          return items
+        } catch {
+          /* try next shape */
+        }
       }
+      cache.set(cacheKey, [], CACHE_EMPTY_MS)
+      return []
     },
 
     async browse(catalogId, ctx = {}) {
       const cat = getCatalogById(catalogId)
       if (!cat) return []
-      // genre on catalog request is handled by server via browseGenre when genre extra set
       return this._browsePath(cat.path, cat.type, ctx, catalogId)
     },
 
@@ -290,9 +293,8 @@ export function createDigiMovieProvider(deps = {}) {
         logger.warn?.('digimovie browse skipped — no cookie', { catalogId })
         return []
       }
-      const skip = Number(ctx.skip) || 0
-      const page = Math.floor(skip / PAGE_SIZE) + 1
-      const cacheKey = `digi-browse:${catalogId}:${page}`
+      const page = pageFromSkip(ctx.skip)
+      const cacheKey = `digi-browse-v3:${catalogId}:${page}`
       const hit = cache.get(cacheKey)
       if (Array.isArray(hit) && hit.length) return hit
 
@@ -326,17 +328,16 @@ export function createDigiMovieProvider(deps = {}) {
         logger.info?.('digimovie browse', {
           catalogId,
           page,
+          skip: ctx.skip,
           url,
-          base,
           count: items.length,
-          withPoster: items.filter((i) => i.poster).length,
         })
         return items
       } catch (err) {
         logger.warn?.('digimovie browse failed', {
           message: err.message,
           catalogId,
-          attempts: err.attempts,
+          page,
         })
         return []
       }
@@ -346,10 +347,7 @@ export function createDigiMovieProvider(deps = {}) {
       const pagePath = decodePageId(itemId)
       if (!pagePath) return null
       const config = ctx.config || {}
-      if (!cookieOf(config)) {
-        logger.warn?.('digimovie detail skipped — no cookie')
-        return null
-      }
+      if (!cookieOf(config)) return null
       const cacheKey = `digi-detail:${pagePath}`
       const hit = cache.get(cacheKey)
       if (hit && (hit.streams?.length || hit.videos?.length)) return hit
@@ -420,19 +418,9 @@ export function createDigiMovieProvider(deps = {}) {
           detail,
           streams.length || videos.length ? CACHE_DETAIL_MS : 60_000,
         )
-        logger.info?.('digimovie detail', {
-          pagePath,
-          type: detail.type,
-          streams: streams.length,
-          videos: videos.length,
-        })
         return detail
       } catch (err) {
-        logger.warn?.('digimovie detail failed', {
-          message: err.message,
-          itemId,
-          attempts: err.attempts,
-        })
+        logger.warn?.('digimovie detail failed', { message: err.message, itemId })
         return null
       }
     },
