@@ -265,20 +265,15 @@ input:focus{outline:2px solid rgba(124,58,237,.55);outline-offset:1px}
       <form method="post" action="/session/clear" style="margin-top:12px">
         <button type="submit" class="btn btn-danger">پاک کردن نشست سرور</button>
       </form>
-      <div class="status-bar">
-        <span class="badge"><strong>v${esc(version)}</strong> · Node runtime</span>
-        <span class="badge">Cinemeta · بدون کلید API</span>
-        <span class="badge">Stremio protocol</span>
-      </div>
     </div>
   </section>
 
   <section class="section" id="docs">
-    <div class="section-head"><h2>راهنما و عیب‌یابی</h2><p>شروع سریع برای نصب و پیکربندی.</p></div>
+    <div class="section-head"><h2>راهنمای سریع</h2><p>نصب، پیکربندی و عیب‌یابی اولیه.</p></div>
     <div class="doc-grid">
-      <article class="glass doc"><h3>نصب در استریمیو</h3><p>مانیفست عمومی یا شخصی را کپی کنید → در استریمیو Addons → Community Addons → Install from URL.</p></article>
-      <article class="glass doc"><h3>کوکی منابع اشتراکی</h3><p>بعد از لاگین در سایت منبع، از DevTools → Application → Cookies مقدار PHPSESSID (یا session) را کپی کنید. بدون کوکی معتبر، کاتالوگ‌های اشتراکی فعال نمی‌شوند.</p></article>
-      <article class="glass doc"><h3>کاتالوگ‌ها</h3><p>هر پروایدر کاتالوگ فیلم/سریال خود را دارد. جستجو بر اساس نوع کاتالوگ فیلتر می‌شود.</p></article>
+      <article class="glass doc"><h3>نصب در استریمیو</h3><p>لینک مانیفست را کپی کنید یا دکمه «نصب در استریمیو» را بزنید. در استریمیو: Addons → Community / URL.</p></article>
+      <article class="glass doc"><h3>منابع رایگان</h3><p>F2، Cinamatic و Asl بدون کوکی کار می‌کنند. برای کاتالوگ کامل‌تر یکی یا همه را روشن بگذارید.</p></article>
+      <article class="glass doc"><h3>Ava / Digi</h3><p>از مرورگر وارد سایت شوید، DevTools → Application → Cookies را باز کنید و مقدار PHPSESSID (یا session) را کپی کنید.</p></article>
       <article class="glass doc"><h3>عیب‌یابی</h3><p><span dir="ltr">/health</span> را چک کنید. اگر کاتالوگ خالی است کوکی و baseUrl را بررسی کنید. سرور را بعد از تغییر کد ری‌استارت کنید.</p></article>
     </div>
   </section>
