@@ -19,7 +19,13 @@ import {
   buildSeriesVideos,
   decodePageId,
 } from './parse.js'
-import { getCatalogById, toManifestCatalogs, catalogListUrl } from './catalogs.js'
+import {
+  getCatalogById,
+  toManifestCatalogs,
+  catalogListUrl,
+  genreListUrl,
+  DIGI_PAGE_SIZE,
+} from './catalogs.js'
 
 const DEFAULT_BASE = 'https://digimoviez53.top'
 const MIRROR_BASES = [
@@ -27,7 +33,7 @@ const MIRROR_BASES = [
   'https://www.digimoviez.com',
   'https://digimoviez.com',
 ]
-const PAGE_SIZE = 24
+const PAGE_SIZE = DIGI_PAGE_SIZE
 const CACHE_LIST_MS = 8 * 60_000
 const CACHE_EMPTY_MS = 8_000
 const CACHE_DETAIL_MS = 10 * 60_000
@@ -245,9 +251,36 @@ export function createDigiMovieProvider(deps = {}) {
       return this._browsePath(path, type === 'series' ? 'series' : 'movie', ctx, `type:${type}`)
     },
 
+    async browseGenre(type, genre, ctx = {}) {
+      const config = ctx.config || {}
+      if (!cookieOf(config)) return []
+      const skip = Number(ctx.skip) || 0
+      const page = Math.floor(skip / PAGE_SIZE) + 1
+      const want = type === 'series' ? 'series' : 'movie'
+      const cacheKey = `digi-genre:${want}:${genre}:${page}`
+      const hit = cache.get(cacheKey)
+      if (Array.isArray(hit) && hit.length) return hit
+      try {
+        const dummy = 'https://host.invalid'
+        const full = genreListUrl(dummy, genre, want, page)
+        const listPath = full.replace(dummy, '')
+        const { html, base } = await fetchHtml(listPath, config, ctx.timeoutMs || 22_000, 'list')
+        let parsed = parseListingHtml(html, base, want)
+        parsed = parsed.map((it) => ({ ...it, type: want }))
+        const items = mapItems(parsed)
+        await enrichListMissingPosters(items, 18)
+        cache.set(cacheKey, items, items.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
+        return items
+      } catch (err) {
+        logger.warn?.('digimovie genre failed', { genre, message: err.message })
+        return []
+      }
+    },
+
     async browse(catalogId, ctx = {}) {
       const cat = getCatalogById(catalogId)
       if (!cat) return []
+      // genre on catalog request is handled by server via browseGenre when genre extra set
       return this._browsePath(cat.path, cat.type, ctx, catalogId)
     },
 
