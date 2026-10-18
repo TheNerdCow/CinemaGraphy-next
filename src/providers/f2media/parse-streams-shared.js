@@ -47,7 +47,7 @@ export function formatStreamLabel(info = {}) {
 }
 
 const ENCODER_RE =
-  /\b(PSA|YIFY|YTS|RARBG|FLUX|CMRG|ETHEL|KyoGo|SPARKS|EVO|FUM|NTB|NTb|AMZN|NF|ATVP|HULU|DSNP|iT|MeGusta|QxR|Tigole|Wxn|UTR|Joy|Pahe|Judas|Yui|BRiNK|d3g|MZON|HONE|SB|GalaxyRG|aXXo|FGT|ANOX|RZeroX|RMTeam|MkvCage|ION10|TBS|DIMENSION)\b/i
+  /\b(DigiMoviez?|PSA|YIFY|YTS|RARBG|FLUX|CMRG|ETHEL|KyoGo|SPARKS|EVO|FUM|NTB|NTb|AMZN|NF|ATVP|HULU|DSNP|iT|MeGusta|QxR|Tigole|Wxn|UTR|Joy|Pahe|Judas|Yui|BRiNK|d3g|MZON|HONE|SB|GalaxyRG|aXXo|FGT|ANOX|RZeroX|RMTeam|MkvCage|ION10|TBS|DIMENSION)\b/i
 
 export function analyzeMediaUrl(url) {
   const u = String(url)
@@ -83,7 +83,7 @@ export function analyzeMediaUrl(url) {
   const bit10 = /10bit|10-bit|Hi10/i.test(u)
   const encoder =
     match1(u, ENCODER_RE) ||
-    match1(u, /\.(PSA|YIFY|KyoGo|ETHEL|RARBG|FLUX|CMRG)(?:\.|$)/i)
+    match1(u, /\.(PSA|YIFY|KyoGo|ETHEL|RARBG|FLUX|CMRG|DigiMoviez?)(?:\.|$)/i)
   const size = extractSizeFromText(u)
   return {
     quality,
@@ -100,7 +100,6 @@ export function analyzeMediaUrl(url) {
 export function extractQuality(text) {
   const t = String(text)
   if (/\b2160p\b|\b4K\b|\bUHD\b/i.test(t)) return '2160p'
-  // bare 1080 / 720 next to size (Cinamatic button text)
   const m =
     t.match(/\b(1080p|720p|480p|360p)\b/i) ||
     t.match(/\b(2160|1080|720|480|360)\s*(?:p\b|(?=\s*(?:x265|x264|GB|MB|\d)))/i)
@@ -109,16 +108,25 @@ export function extractQuality(text) {
   return /p$/i.test(m[1]) ? m[1] : `${n}p`
 }
 
-/** Size from URL or button label: 2GB, 1.6GB, 842MB, ۲ گیگ */
+/** Size: "1.6GB", "842MB", "GB 1.34", "MB 450", "۲ گیگ" */
 export function extractSizeFromText(text) {
   const t = String(text)
   let m = t.match(/(\d+(?:[.,]\d+)?)\s*(GB|MB|گیگ(?:ابایت)?|مگ(?:ابایت)?)/i)
   if (!m) m = t.match(/(\d+(?:[.,]\d+)?)(GB|MB)\b/i)
+  if (!m) m = t.match(/\b(GB|MB|گیگ(?:ابایت)?|مگ(?:ابایت)?)\s*[:=]?\s*(\d+(?:[.,]\d+)?)/i)
   if (!m) return null
-  const num = m[1].replace(',', '.')
-  let unit = m[2].toUpperCase()
-  if (/گیگ/i.test(m[2])) unit = 'GB'
-  if (/مگ/i.test(m[2])) unit = 'MB'
+  let num, unitRaw
+  if (/^(GB|MB|گیگ|مگ)/i.test(m[1]) && m[2] && /^\d/.test(m[2])) {
+    unitRaw = m[1]
+    num = m[2].replace(',', '.')
+  } else {
+    num = m[1].replace(',', '.')
+    unitRaw = m[2]
+  }
+  let unit = String(unitRaw).toUpperCase()
+  if (/گیگ/i.test(unitRaw)) unit = 'GB'
+  if (/مگ/i.test(unitRaw)) unit = 'MB'
+  if (unit !== 'GB' && unit !== 'MB') unit = unit.includes('G') ? 'GB' : 'MB'
   return `${num} ${unit}`
 }
 
