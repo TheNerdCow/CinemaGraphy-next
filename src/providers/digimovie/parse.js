@@ -1,11 +1,5 @@
 /**
  * DigiMovie HTML parsers — digimoviez*.top WordPress theme.
- *
- * Paths:
- *   /movies/  /series/
- *   /category/انیمه/  /category/سریال-کره-ای/  /category/فیلم-هندی/
- *   movie: /slug-year/
- *   series: /serie/slug/
  */
 
 const SECTION_ROOTS = new Set([
@@ -23,6 +17,7 @@ const SECTION_ROOTS = new Set([
   'wp-content',
   'wp-json',
   'top-250',
+  'top250',
   'search',
   'contact',
   'contact-us',
@@ -35,16 +30,22 @@ const SECTION_ROOTS = new Set([
   'help',
   'app',
   'artists',
+  'news',
+  'blog',
 ])
 
 const NOISE_TITLE_RE =
-  /^(ورود|خروج|ثبت\s*نام|تماس(\s*با\s*ما)?|قوانین|DMCA(\s*POLICY)?|POLICY|CONTACT|Home|خانه|جستجو|Search|Login|Logout|APP|اپلیکیشن|هنرمندان|ARTISTS|لیست\s*علاقه|باکس\s*آفیس)$/i
+  /^(ورود|خروج|ثبت\s*نام|تماس(\s*با\s*ما)?|قوانین|DMCA(\s*POLICY)?|POLICY|CONTACT|Home|خانه|جستجو|Search|Login|Logout|APP|اپلیکیشن|هنرمندان|ARTISTS|لیست\s*علاقه(\s*مندی)?|باکس\s*آفیس|اخبار(\s*سینما)?(\s*و\s*هنرمندان)?|فیلم\s*برتر(\s*تاریخ)?\s*۲۵۰|سریال\s*برتر(\s*تاریخ)?\s*۲۵۰|Top\s*250)$/i
 
 const NOISE_TITLE_IN =
-  /DMCA|CONTACT\s*US|تماس\s*با\s*ما|حریم\s*خصوصی|شرایط\s*استفاده|Privacy\s*Policy|Terms\s*of/i
+  /DMCA|CONTACT\s*US|تماس\s*با\s*ما|حریم\s*خصوصی|شرایط\s*استفاده|Privacy\s*Policy|Terms\s*of|برتر\s*تاریخ\s*۲۵۰|لیست\s*علاقه|اخبار\s*سینما|ARTISTS|هنرمندان/i
+
+/** Episode-update cards used as catalog rows on Digi */
+const EPISODE_TITLE_RE =
+  /^(قسمت\s*[\d\u06f0-\u06f9]+(\s*فصل\s*[\d\u06f0-\u06f9\w]+)?|فصل\s*[\d\u06f0-\u06f9]+(\s*قسمت\s*[\d\u06f0-\u06f9]+)?)$/i
 
 const NOISE_PATH_RE =
-  /\b(contact|dmca|policy|privacy|terms|about|faq|login|register|account|dashboard|artists?|app)\b/i
+  /\b(contact|dmca|policy|privacy|terms|about|faq|login|register|account|dashboard|artists?|app|top-?250|news|blog|wishlist|favorites?)\b/i
 
 export function parseListingHtml(html, baseUrl, forceType) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
@@ -54,7 +55,9 @@ export function parseListingHtml(html, baseUrl, forceType) {
   let scope = html
   const main =
     html.match(/<main[\s\S]*?<\/main>/i) ||
-    html.match(/class="[^"]*(?:archive|content-area|site-main|movies_list|post-listing)[^"]*"[\s\S]{0,250000}/i)
+    html.match(
+      /class="[^"]*(?:archive|content-area|site-main|movies_list|post-listing|posts-container)[^"]*"[\s\S]{0,300000}/i,
+    )
   if (main) scope = main[0]
 
   const linkRe =
@@ -63,15 +66,27 @@ export function parseListingHtml(html, baseUrl, forceType) {
   while ((m = linkRe.exec(scope)) !== null) {
     const abs = resolveUrl(base, m[1])
     if (!abs || !sameHostFamily(abs, base)) continue
-    const pagePath = pathFromUrl(abs)
+
+    let pagePath = pathFromUrl(abs)
+    if (!pagePath || isNoisePath(pagePath)) continue
+
+    pagePath = normalizeDetailPath(pagePath)
     if (!pagePath || seen.has(pagePath) || isNoisePath(pagePath)) continue
     if (!isLikelyDetailPath(pagePath, forceType)) continue
 
-    const title =
+    let title =
       cleanTitle(m[2] || '') ||
       cleanTitle(stripTags(m[3] || '')) ||
-      cleanTitle(pagePath.split('/').pop().replace(/-/g, ' '))
-    if (!title || title.length < 2 || isNoiseTitle(title)) continue
+      ''
+
+    // Episode cards → derive title from serie slug
+    if (!title || isNoiseTitle(title) || isEpisodeTitle(title)) {
+      const fromPath = titleFromPath(pagePath)
+      if (fromPath && !isNoiseTitle(fromPath) && !isEpisodeTitle(fromPath)) {
+        title = fromPath
+      }
+    }
+    if (!title || title.length < 2 || isNoiseTitle(title) || isEpisodeTitle(title)) continue
 
     const start = Math.max(0, m.index - 900)
     const slice = scope.slice(start, m.index + m[0].length + 200)
@@ -84,16 +99,9 @@ export function parseListingHtml(html, baseUrl, forceType) {
       if (/svg|icon|logo|sprite|avatar|placeholder/i.test(poster)) poster = undefined
     }
 
-    const type =
-      forceType ||
-      (/^serie\//i.test(pagePath) ? 'series' : 'movie')
+    const type = forceType || (/^serie\//i.test(pagePath) ? 'series' : 'movie')
 
-    // When browsing a series catalog, drop pure movie root-slugs without serie/
-    if (forceType === 'series' && !/^serie\//i.test(pagePath)) {
-      // allow if title strongly suggests series and path has year-less long slug — still prefer serie/
-      // Strict: only /serie/
-      continue
-    }
+    if (forceType === 'series' && !/^serie\//i.test(pagePath)) continue
     if (forceType === 'movie' && /^serie\//i.test(pagePath)) continue
 
     seen.add(pagePath)
@@ -105,7 +113,7 @@ export function parseListingHtml(html, baseUrl, forceType) {
       poster: poster || undefined,
       pagePath,
     })
-    if (results.length >= 80) break
+    if (results.length >= 60) break
   }
 
   return results
@@ -133,7 +141,7 @@ export function parseDetailMeta(html, baseUrl) {
       ? 'series'
       : 'movie'
   return {
-    title: clean,
+    title: clean && !isEpisodeTitle(clean) ? clean : clean,
     year: year || undefined,
     imdb: imdb || undefined,
     type,
@@ -219,6 +227,38 @@ export function decodePageId(itemId) {
   } catch {
     return null
   }
+}
+
+function normalizeDetailPath(pagePath) {
+  const segs = String(pagePath)
+    .replace(/\/+$/, '')
+    .split('/')
+    .filter(Boolean)
+  if (!segs.length) return null
+  // /serie/slug[/anything] → serie/slug
+  if (segs[0].toLowerCase() === 'serie' && segs.length >= 2) {
+    return `serie/${segs[1]}`
+  }
+  // single segment movie slug
+  if (segs.length === 1) return segs[0]
+  return segs.join('/')
+}
+
+function titleFromPath(pagePath) {
+  const segs = String(pagePath).split('/').filter(Boolean)
+  const slug = segs[0] === 'serie' ? segs[1] : segs[segs.length - 1]
+  if (!slug) return ''
+  return cleanTitle(decodeURIComponent(slug).replace(/-/g, ' '))
+}
+
+function isEpisodeTitle(title) {
+  const t = String(title || '').trim()
+  if (!t) return false
+  if (EPISODE_TITLE_RE.test(t)) return true
+  // "قسمت 6 فصل چهارم" without other words
+  if (/قسمت/.test(t) && /فصل/.test(t) && t.length < 40) return true
+  if (/^S\d+E\d+$/i.test(t)) return true
+  return false
 }
 
 function analyze(url, ctx) {
@@ -308,7 +348,6 @@ function isNoiseTitle(title) {
   if (!t || t.length <= 2) return true
   if (NOISE_TITLE_RE.test(t)) return true
   if (NOISE_TITLE_IN.test(t)) return true
-  // pure punctuation / arrows from footer widgets
   if (/^[-–—>\s\u200c]+$/.test(t)) return true
   if ((t.match(/-/g) || []).length >= 4 && t.length < 40) return true
   return false
@@ -323,6 +362,7 @@ function isNoisePath(pagePath) {
   if (segs.length >= 2 && SECTION_ROOTS.has(segs[0]) && segs[1] === 'page') return true
   if (segs[0] === 'serie' && segs.length === 1) return true
   if (segs[0] === 'category' || segs[0] === 'genre' || segs[0] === 'tag') return true
+  // encoded persian junk often in path for widgets — rare
   return false
 }
 
@@ -330,10 +370,7 @@ function isLikelyDetailPath(pagePath, forceType) {
   const segs = String(pagePath).split('/').filter(Boolean)
   if (!segs.length) return false
   if (segs[0] === 'serie' && segs.length >= 2 && segs[1] !== 'page') return true
-  if (forceType === 'series') {
-    // strict serie-only when listing series catalogs
-    return false
-  }
+  if (forceType === 'series') return false
   if (segs.length === 1 && segs[0].length > 3 && !SECTION_ROOTS.has(segs[0].toLowerCase())) {
     return true
   }
