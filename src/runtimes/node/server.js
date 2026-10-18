@@ -1,6 +1,6 @@
 /**
  * Node runtime — Core + Stremio adapter + providers.
- * CinemaGraphy-next 0.6.1 — catalogs + search type filter
+ * CinemaGraphy-next 0.6.2 — FA landing polish
  */
 import cors from 'cors'
 import express from 'express'
@@ -24,7 +24,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.6.1'
+const VERSION = process.env.ADDON_VERSION || '0.6.2'
 
 const FREE_PROVIDERS = ['f2media', 'cinamatic', 'aslmoviez']
 const ALL_PROVIDER_KEYS = [...FREE_PROVIDERS, 'avamovie', 'digimovie']
@@ -113,48 +113,136 @@ function stripProto(u) {
 
 function landingHtml(opts = {}) {
   const {
-    flash, personalPath = '', selected = FREE_PROVIDERS,
-    cookieValue = '', digiCookieValue = '', avaBaseUrl = '', digiBaseUrl = '',
+    flash,
+    personalPath = '',
+    selected = FREE_PROVIDERS,
+    cookieValue = '',
+    digiCookieValue = '',
+    avaBaseUrl = '',
+    digiBaseUrl = '',
   } = opts
   const sel = (k) => (selected.includes(k) ? ' checked' : '')
   const flashBox = flash
-    ? '<div style="padding:10px 12px;border-radius:8px;margin:12px 0;background:' +
-      (flash.ok ? '#0f3d2e' : '#3d1515') + ';border:1px solid ' +
-      (flash.ok ? '#1a7a55' : '#a33') + '">' + escapeHtml(flash.msg) + '</div>'
+    ? `<div class="flash ${flash.ok ? 'ok' : 'err'}">${escapeHtml(flash.msg)}</div>`
     : ''
   const install = personalPath
-    ? '<p style="margin-top:14px"><a href="stremio://' + escapeHtml(stripProto(personalPath)) +
-      '" style="display:inline-block;padding:10px 16px;background:#7c3aed;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Install Stremio</a>' +
-      '<br><small style="opacity:.7">manifest: <code dir="ltr">' + escapeHtml(personalPath) + '</code></small></p>'
+    ? `<div class="install">
+        <a class="btn primary" href="stremio://${escapeHtml(stripProto(personalPath))}">نصب در استریمیو</a>
+        <button type="button" class="btn ghost" onclick="navigator.clipboard.writeText(${JSON.stringify(personalPath)}).then(()=>this.textContent='کپی شد').catch(()=>{})">کپی لینک مانیفست</button>
+        <p class="mono" dir="ltr">${escapeHtml(personalPath)}</p>
+      </div>`
     : ''
-  return '<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8"/>' +
-    '<meta name="viewport" content="width=device-width,initial-scale=1"/>' +
-    '<title>CinemaGraphy Next ' + VERSION + '</title>' +
-    '<style>body{font-family:Tahoma,system-ui,sans-serif;background:#0b0f19;color:#e8eef7;margin:0;padding:24px;line-height:1.6}' +
-    '.card{max-width:560px;margin:0 auto;background:#121826;border:1px solid #243044;border-radius:14px;padding:22px 20px}' +
-    'h1{margin:0 0 6px;font-size:1.35rem}label{display:block;margin:10px 0 4px;font-size:.9rem;opacity:.9}' +
-    'input[type=text],input[type=password]{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid #2a3a52;background:#0b0f19;color:#e8eef7}' +
-    '.row{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0}.chk{display:flex;align-items:center;gap:6px;margin:4px 8px 4px 0}' +
-    'button{margin-top:14px;padding:10px 18px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-weight:600;cursor:pointer}' +
-    'button.secondary{background:#334155}small,code{font-size:.8rem}a{color:#93c5fd}</style></head><body><div class="card">' +
-    '<h1>CinemaGraphy Next <span style="opacity:.55;font-size:.85rem">' + VERSION + '</span></h1>' +
-    '<p style="opacity:.75;margin:0 0 12px">F2 / Cinamatic / Asl free · Ava / Digi with cookie</p>' +
-    flashBox + install +
-    '<form method="post" action="/configure"><div class="row">' +
-    '<label class="chk"><input type="checkbox" name="providers" value="f2media"' + sel('f2media') + '/> F2Media</label>' +
-    '<label class="chk"><input type="checkbox" name="providers" value="cinamatic"' + sel('cinamatic') + '/> Cinamatic</label>' +
-    '<label class="chk"><input type="checkbox" name="providers" value="aslmoviez"' + sel('aslmoviez') + '/> AslMoviez</label>' +
-    '<label class="chk"><input type="checkbox" name="providers" value="avamovie"' + sel('avamovie') + '/> AvaMovie</label>' +
-    '<label class="chk"><input type="checkbox" name="providers" value="digimovie"' + sel('digimovie') + '/> DigiMovie</label>' +
-    '</div>' +
-    '<label>Ava cookie</label><input type="password" name="avaCookie" value="' + escapeHtml(cookieValue) + '" autocomplete="off"/>' +
-    '<label>Ava baseUrl</label><input type="text" name="avaBaseUrl" value="' + escapeHtml(avaBaseUrl) + '" dir="ltr"/>' +
-    '<label>Digi cookie</label><input type="password" name="digiCookie" value="' + escapeHtml(digiCookieValue) + '" autocomplete="off"/>' +
-    '<label>Digi baseUrl</label><input type="text" name="digiBaseUrl" value="' + escapeHtml(digiBaseUrl) + '" dir="ltr"/>' +
-    '<button type="submit">Build personal manifest</button></form>' +
-    '<form method="post" action="/session/clear" style="margin-top:8px"><button type="submit" class="secondary">Clear session</button></form>' +
-    '<p style="margin-top:16px;opacity:.65;font-size:.85rem">Public: <a href="/manifest.json" dir="ltr">/manifest.json</a></p>' +
-    '</div></body></html>'
+
+  return `<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>CinemaGraphy Next ${VERSION}</title>
+<style>
+:root{
+  --bg:#070b14; --card:#0f1624; --line:#1e2a3d; --text:#e8eef7; --muted:#8b9bb4;
+  --accent:#7c3aed; --accent2:#2563eb; --ok:#10b981; --err:#ef4444; --chip:#182234;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:Tahoma,Segoe UI,system-ui,sans-serif;background:radial-gradient(1200px 600px at 80% -10%,#1a1040 0%,var(--bg) 55%);color:var(--text);line-height:1.65;min-height:100vh}
+.wrap{max-width:640px;margin:0 auto;padding:28px 16px 48px}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.logo{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,var(--accent),#4f46e5);display:grid;place-items:center;font-weight:800;font-size:1.1rem}
+h1{margin:0;font-size:1.35rem;letter-spacing:-.02em}
+.sub{margin:2px 0 0;color:var(--muted);font-size:.88rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px 18px;margin-bottom:14px;box-shadow:0 8px 30px rgba(0,0,0,.25)}
+h2{margin:0 0 10px;font-size:1rem;color:#c4d0e4}
+.hint{color:var(--muted);font-size:.82rem;margin:0 0 12px}
+.row{display:flex;flex-wrap:wrap;gap:8px}
+.chk{display:flex;align-items:center;gap:8px;background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:8px 12px;font-size:.9rem;cursor:pointer;user-select:none}
+.chk input{accent-color:var(--accent)}
+.chk.premium{border-color:#3b2a6b}
+label.field{display:block;margin:12px 0 4px;font-size:.86rem;color:#b7c5dc}
+input[type=text],input[type=password]{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:#0a101c;color:var(--text);font-size:.92rem}
+input:focus{outline:2px solid #5b21b6;outline-offset:1px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:560px){.grid2{grid-template-columns:1fr}}
+.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:11px 16px;border-radius:10px;border:0;font-weight:700;font-size:.92rem;cursor:pointer;text-decoration:none;color:#fff}
+.btn.primary{background:linear-gradient(135deg,var(--accent),#5b21b6)}
+.btn.blue{background:var(--accent2)}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
+.btn.danger{background:#3f1d1d;border:1px solid #7f1d1d;color:#fecaca}
+.flash{padding:11px 12px;border-radius:10px;margin-bottom:12px;font-size:.9rem}
+.flash.ok{background:#0c2a22;border:1px solid #147a55;color:#a7f3d0}
+.flash.err{background:#2a1212;border:1px solid #9b1c1c;color:#fecaca}
+.install{margin:12px 0 4px;padding:14px;border-radius:12px;background:#14102a;border:1px solid #3b2a6b}
+.install .mono{margin:10px 0 0;font-size:.75rem;color:var(--muted);word-break:break-all}
+.foot{margin-top:18px;color:var(--muted);font-size:.8rem;text-align:center}
+.foot a{color:#93c5fd}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#1e293b;color:#94a3b8;font-size:.75rem;margin-right:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <div class="logo">CG</div>
+    <div>
+      <h1>CinemaGraphy Next <span class="badge">v${VERSION}</span></h1>
+      <p class="sub">افزونه استریمیو · منابع ایرانی رایگان و اشتراکی</p>
+    </div>
+  </div>
+
+  ${flashBox}
+  ${install}
+
+  <form method="post" action="/configure">
+    <div class="card">
+      <h2>منابع رایگان</h2>
+      <p class="hint">بدون کوکی کار می‌کنند. حداقل یکی را روشن بگذارید.</p>
+      <div class="row">
+        <label class="chk"><input type="checkbox" name="providers" value="f2media"${sel('f2media')}/> F2Media</label>
+        <label class="chk"><input type="checkbox" name="providers" value="cinamatic"${sel('cinamatic')}/> Cinamatic</label>
+        <label class="chk"><input type="checkbox" name="providers" value="aslmoviez"${sel('aslmoviez')}/> AslMoviez</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>منابع اشتراکی</h2>
+      <p class="hint">برای Ava و Digi باید کوکی نشست (مثل PHPSESSID) را از مرورگر کپی کنید. baseUrl اختیاری است.</p>
+      <div class="row" style="margin-bottom:8px">
+        <label class="chk premium"><input type="checkbox" name="providers" value="avamovie"${sel('avamovie')}/> AvaMovie</label>
+        <label class="chk premium"><input type="checkbox" name="providers" value="digimovie"${sel('digimovie')}/> DigiMovie</label>
+      </div>
+      <div class="grid2">
+        <div>
+          <label class="field">کوکی Ava</label>
+          <input type="password" name="avaCookie" value="${escapeHtml(cookieValue)}" autocomplete="off" placeholder="PHPSESSID=..."/>
+          <label class="field">Ava baseUrl</label>
+          <input type="text" name="avaBaseUrl" value="${escapeHtml(avaBaseUrl)}" dir="ltr" placeholder="https://..."/>
+        </div>
+        <div>
+          <label class="field">کوکی Digi</label>
+          <input type="password" name="digiCookie" value="${escapeHtml(digiCookieValue)}" autocomplete="off" placeholder="PHPSESSID=..."/>
+          <label class="field">Digi baseUrl</label>
+          <input type="text" name="digiBaseUrl" value="${escapeHtml(digiBaseUrl)}" dir="ltr" placeholder="https://digimoviez53.top"/>
+        </div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn blue">ساخت مانیفست شخصی</button>
+    </div>
+  </form>
+
+  <form method="post" action="/session/clear" style="margin-top:10px">
+    <button type="submit" class="btn danger">پاک کردن نشست سرور</button>
+  </form>
+
+  <p class="foot">
+    مانیفست عمومی (فقط رایگان‌ها اگر در env فعال باشند):
+    <a href="/manifest.json" dir="ltr">/manifest.json</a>
+    · <a href="/health" dir="ltr">/health</a>
+  </p>
+</div>
+</body>
+</html>`
 }
 
 function toMetas(items, providerKey) {
@@ -192,15 +280,15 @@ function createApp() {
 
     if (!providers.length) providers = [...FREE_PROVIDERS]
     if (providers.includes('avamovie') && !cookie) {
-      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'Ava checked but cookie empty' }, selected: providers, digiCookieValue: digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }))
+      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'آوا تیک خورده ولی کوکی خالی است' }, selected: providers, digiCookieValue: digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }))
     }
     if (providers.includes('digimovie') && !digiCookie) {
-      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'Digi checked but cookie empty' }, selected: providers, cookieValue: cookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }))
+      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'دیجی تیک خورده ولی کوکی خالی است' }, selected: providers, cookieValue: cookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }))
     }
 
     const cfg = buildPersonalConfig({ providersEnabled: providers, avaCookie: cookie, digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase })
     const token = encodeUserConfig(cfg)
-    if (!token) return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'config encode failed' }, selected: providers }))
+    if (!token) return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'ساخت کانفیگ ناموفق بود' }, selected: providers }))
 
     if (cookie) setSessionCookie('avamovie', cookie)
     if (digiCookie) setSessionCookie('digimovie', digiCookie)
@@ -209,7 +297,7 @@ function createApp() {
     const proto = (req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim()
     const personalPath = proto + '://' + host + '/c/' + token + '/manifest.json'
     return res.type('html').send(landingHtml({
-      flash: { ok: true, msg: 'Personal manifest ready' },
+      flash: { ok: true, msg: 'مانیفست شخصی آماده است — نصب کن یا لینک را کپی کن' },
       personalPath,
       selected: cfg.providersEnabled,
       cookieValue: cookie,
@@ -222,7 +310,7 @@ function createApp() {
   app.post('/session/clear', (_req, res) => {
     setSessionCookie('avamovie', '')
     setSessionCookie('digimovie', '')
-    res.type('html').send(landingHtml({ flash: { ok: true, msg: 'Session cleared' } }))
+    res.type('html').send(landingHtml({ flash: { ok: true, msg: 'نشست سرور پاک شد' } }))
   })
 
   app.get('/health', (_req, res) => {
