@@ -1,11 +1,11 @@
 /**
- * DigiMovie HTML parsers — clean-room for digimoviez*.top WordPress theme.
+ * DigiMovie HTML parsers — digimoviez*.top WordPress theme.
  *
- * Paths observed:
+ * Paths:
  *   /movies/  /series/
  *   /category/انیمه/  /category/سریال-کره-ای/  /category/فیلم-هندی/
- *   movie detail: /slug-year/
- *   series detail: /serie/slug/
+ *   movie: /slug-year/
+ *   series: /serie/slug/
  */
 
 const SECTION_ROOTS = new Set([
@@ -24,24 +24,39 @@ const SECTION_ROOTS = new Set([
   'wp-json',
   'top-250',
   'search',
+  'contact',
+  'contact-us',
+  'dmca',
+  'policy',
+  'privacy',
+  'terms',
+  'about',
+  'faq',
+  'help',
+  'app',
+  'artists',
 ])
 
-const NOISE_TITLES =
-  /^(ورود|خروج|ثبت\s*نام|تماس|قوانین|DMCA|Home|خانه|جستجو|Search|Login|Logout)$/i
+const NOISE_TITLE_RE =
+  /^(ورود|خروج|ثبت\s*نام|تماس(\s*با\s*ما)?|قوانین|DMCA(\s*POLICY)?|POLICY|CONTACT|Home|خانه|جستجو|Search|Login|Logout|APP|اپلیکیشن|هنرمندان|ARTISTS|لیست\s*علاقه|باکس\s*آفیس)$/i
+
+const NOISE_TITLE_IN =
+  /DMCA|CONTACT\s*US|تماس\s*با\s*ما|حریم\s*خصوصی|شرایط\s*استفاده|Privacy\s*Policy|Terms\s*of/i
+
+const NOISE_PATH_RE =
+  /\b(contact|dmca|policy|privacy|terms|about|faq|login|register|account|dashboard|artists?|app)\b/i
 
 export function parseListingHtml(html, baseUrl, forceType) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const results = []
   const seen = new Set()
 
-  // Prefer main content
   let scope = html
   const main =
     html.match(/<main[\s\S]*?<\/main>/i) ||
-    html.match(/class="[^"]*(?:archive|content-area|site-main)[^"]*"[\s\S]{0,200000}/i)
+    html.match(/class="[^"]*(?:archive|content-area|site-main|movies_list|post-listing)[^"]*"[\s\S]{0,250000}/i)
   if (main) scope = main[0]
 
-  // Cards / articles with detail links
   const linkRe =
     /<a[^>]+href=["'](https?:\/\/[^"']+|\/[^"']+)["'][^>]*(?:title=["']([^"']*)["'])?[^>]*>([\s\S]*?)<\/a>/gi
   let m
@@ -50,7 +65,7 @@ export function parseListingHtml(html, baseUrl, forceType) {
     if (!abs || !sameHostFamily(abs, base)) continue
     const pagePath = pathFromUrl(abs)
     if (!pagePath || seen.has(pagePath) || isNoisePath(pagePath)) continue
-    if (!isLikelyDetailPath(pagePath)) continue
+    if (!isLikelyDetailPath(pagePath, forceType)) continue
 
     const title =
       cleanTitle(m[2] || '') ||
@@ -58,7 +73,6 @@ export function parseListingHtml(html, baseUrl, forceType) {
       cleanTitle(pagePath.split('/').pop().replace(/-/g, ' '))
     if (!title || title.length < 2 || isNoiseTitle(title)) continue
 
-    // Poster near this link: look back ~800 chars for img
     const start = Math.max(0, m.index - 900)
     const slice = scope.slice(start, m.index + m[0].length + 200)
     let poster =
@@ -67,12 +81,20 @@ export function parseListingHtml(html, baseUrl, forceType) {
     if (poster) {
       poster = poster.replace(/^['"]|['"]$/g, '').trim()
       poster = resolveUrl(base, poster) || poster
-      if (/svg|icon|logo|sprite|avatar/i.test(poster)) poster = undefined
+      if (/svg|icon|logo|sprite|avatar|placeholder/i.test(poster)) poster = undefined
     }
 
     const type =
       forceType ||
-      (/^serie\//i.test(pagePath) || /\/series\//i.test(pagePath) ? 'series' : 'movie')
+      (/^serie\//i.test(pagePath) ? 'series' : 'movie')
+
+    // When browsing a series catalog, drop pure movie root-slugs without serie/
+    if (forceType === 'series' && !/^serie\//i.test(pagePath)) {
+      // allow if title strongly suggests series and path has year-less long slug — still prefer serie/
+      // Strict: only /serie/
+      continue
+    }
+    if (forceType === 'movie' && /^serie\//i.test(pagePath)) continue
 
     seen.add(pagePath)
     results.push({
@@ -83,7 +105,7 @@ export function parseListingHtml(html, baseUrl, forceType) {
       poster: poster || undefined,
       pagePath,
     })
-    if (results.length >= 40) break
+    if (results.length >= 80) break
   }
 
   return results
@@ -284,31 +306,34 @@ function isPlayableUrl(href) {
 function isNoiseTitle(title) {
   const t = String(title || '').trim()
   if (!t || t.length <= 2) return true
-  if (NOISE_TITLES.test(t)) return true
+  if (NOISE_TITLE_RE.test(t)) return true
+  if (NOISE_TITLE_IN.test(t)) return true
+  // pure punctuation / arrows from footer widgets
+  if (/^[-–—>\s\u200c]+$/.test(t)) return true
+  if ((t.match(/-/g) || []).length >= 4 && t.length < 40) return true
   return false
 }
 
 function isNoisePath(pagePath) {
-  const segs = String(pagePath)
-    .replace(/\/+$/, '')
-    .toLowerCase()
-    .split('/')
-    .filter(Boolean)
+  const raw = String(pagePath).replace(/\/+$/, '')
+  const segs = raw.toLowerCase().split('/').filter(Boolean)
   if (!segs.length) return true
+  if (NOISE_PATH_RE.test(raw)) return true
   if (segs.length === 1 && SECTION_ROOTS.has(segs[0])) return true
   if (segs.length >= 2 && SECTION_ROOTS.has(segs[0]) && segs[1] === 'page') return true
-  // /serie alone is section-ish; /serie/slug is detail — handled in isLikelyDetailPath
   if (segs[0] === 'serie' && segs.length === 1) return true
-  if (segs[0] === 'category') return true
+  if (segs[0] === 'category' || segs[0] === 'genre' || segs[0] === 'tag') return true
   return false
 }
 
-function isLikelyDetailPath(pagePath) {
+function isLikelyDetailPath(pagePath, forceType) {
   const segs = String(pagePath).split('/').filter(Boolean)
   if (!segs.length) return false
-  // /serie/slug
   if (segs[0] === 'serie' && segs.length >= 2 && segs[1] !== 'page') return true
-  // /slug-2026 single segment movie
+  if (forceType === 'series') {
+    // strict serie-only when listing series catalogs
+    return false
+  }
   if (segs.length === 1 && segs[0].length > 3 && !SECTION_ROOTS.has(segs[0].toLowerCase())) {
     return true
   }
@@ -320,7 +345,6 @@ function sameHostFamily(a, b) {
     const ha = new URL(a).hostname.replace(/^www\./i, '').toLowerCase()
     const hb = new URL(b).hostname.replace(/^www\./i, '').toLowerCase()
     if (ha === hb) return true
-    // digimoviez53.top ↔ digimoviez.com family
     const digi = (h) => /digimoviez/i.test(h)
     if (digi(ha) && digi(hb)) return true
     return false
@@ -353,6 +377,8 @@ function extractYear(text) {
 
 function cleanTitle(t) {
   return stripTags(t)
+    .replace(/^Download\s+/i, '')
+    .replace(/\bDownload\b/gi, ' ')
     .replace(/دانلود\s*(فیلم|سریال|انیمیشن|انیمه)?/gi, '')
     .replace(/بدون\s*سانسور.*$/gi, '')
     .replace(/با\s*زیرنویس.*$/gi, '')
