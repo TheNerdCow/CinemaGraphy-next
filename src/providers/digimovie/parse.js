@@ -18,6 +18,8 @@ const SECTION_ROOTS = new Set([
   'wp-json',
   'top-250',
   'top250',
+  '250movie',
+  '250series',
   'search',
   'contact',
   'contact-us',
@@ -32,20 +34,21 @@ const SECTION_ROOTS = new Set([
   'artists',
   'news',
   'blog',
+  'wishlist',
+  'favorites',
 ])
 
 const NOISE_TITLE_RE =
-  /^(ورود|خروج|ثبت\s*نام|تماس(\s*با\s*ما)?|قوانین|DMCA(\s*POLICY)?|POLICY|CONTACT|Home|خانه|جستجو|Search|Login|Logout|APP|اپلیکیشن|هنرمندان|ARTISTS|لیست\s*علاقه(\s*مندی)?|باکس\s*آفیس|اخبار(\s*سینما)?(\s*و\s*هنرمندان)?|فیلم\s*برتر(\s*تاریخ)?\s*۲۵۰|سریال\s*برتر(\s*تاریخ)?\s*۲۵۰|Top\s*250)$/i
+  /^(ورود|خروج|ثبت\s*نام|تماس(\s*با\s*ما)?|قوانین|DMCA(\s*POLICY)?|POLICY|CONTACT|Home|خانه|جستجو|Search|Login|Logout|APP|اپلیکیشن|هنرمندان|ARTISTS|لیست\s*علاقه(\s*مندی)?|باکس\s*آفیس|اخبار(\s*سینما)?(\s*و\s*هنرمندان)?|فیلم\s*برتر(\s*تاریخ)?\s*[۲۵2]50|سریال\s*برتر(\s*تاریخ)?\s*[۲۵2]50|Top\s*250)$/i
 
 const NOISE_TITLE_IN =
-  /DMCA|CONTACT\s*US|تماس\s*با\s*ما|حریم\s*خصوصی|شرایط\s*استفاده|Privacy\s*Policy|Terms\s*of|برتر\s*تاریخ\s*۲۵۰|لیست\s*علاقه|اخبار\s*سینما|ARTISTS|هنرمندان/i
+  /DMCA|CONTACT\s*US|تماس\s*با\s*ما|حریم\s*خصوصی|شرایط\s*استفاده|Privacy\s*Policy|Terms\s*of|برتر\s*تاریخ\s*[۲۵2]50|لیست\s*علاقه|اخبار\s*سینما|ARTISTS|هنرمندان|Top\s*250/i
 
-/** Episode-update cards used as catalog rows on Digi */
 const EPISODE_TITLE_RE =
   /^(قسمت\s*[\d\u06f0-\u06f9]+(\s*فصل\s*[\d\u06f0-\u06f9\w]+)?|فصل\s*[\d\u06f0-\u06f9]+(\s*قسمت\s*[\d\u06f0-\u06f9]+)?)$/i
 
 const NOISE_PATH_RE =
-  /\b(contact|dmca|policy|privacy|terms|about|faq|login|register|account|dashboard|artists?|app|top-?250|news|blog|wishlist|favorites?)\b/i
+  /\b(contact|dmca|policy|privacy|terms|about|faq|login|register|account|dashboard|artists?|app|top-?250|250movie|250series|news|blog|wishlist|favorites?)\b/i
 
 export function parseListingHtml(html, baseUrl, forceType) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
@@ -79,7 +82,6 @@ export function parseListingHtml(html, baseUrl, forceType) {
       cleanTitle(stripTags(m[3] || '')) ||
       ''
 
-    // Episode cards → derive title from serie slug
     if (!title || isNoiseTitle(title) || isEpisodeTitle(title)) {
       const fromPath = titleFromPath(pagePath)
       if (fromPath && !isNoiseTitle(fromPath) && !isEpisodeTitle(fromPath)) {
@@ -141,7 +143,7 @@ export function parseDetailMeta(html, baseUrl) {
       ? 'series'
       : 'movie'
   return {
-    title: clean && !isEpisodeTitle(clean) ? clean : clean,
+    title: clean,
     year: year || undefined,
     imdb: imdb || undefined,
     type,
@@ -235,11 +237,9 @@ function normalizeDetailPath(pagePath) {
     .split('/')
     .filter(Boolean)
   if (!segs.length) return null
-  // /serie/slug[/anything] → serie/slug
   if (segs[0].toLowerCase() === 'serie' && segs.length >= 2) {
     return `serie/${segs[1]}`
   }
-  // single segment movie slug
   if (segs.length === 1) return segs[0]
   return segs.join('/')
 }
@@ -248,14 +248,17 @@ function titleFromPath(pagePath) {
   const segs = String(pagePath).split('/').filter(Boolean)
   const slug = segs[0] === 'serie' ? segs[1] : segs[segs.length - 1]
   if (!slug) return ''
-  return cleanTitle(decodeURIComponent(slug).replace(/-/g, ' '))
+  try {
+    return cleanTitle(decodeURIComponent(slug).replace(/-/g, ' '))
+  } catch {
+    return cleanTitle(slug.replace(/-/g, ' '))
+  }
 }
 
 function isEpisodeTitle(title) {
   const t = String(title || '').trim()
   if (!t) return false
   if (EPISODE_TITLE_RE.test(t)) return true
-  // "قسمت 6 فصل چهارم" without other words
   if (/قسمت/.test(t) && /فصل/.test(t) && t.length < 40) return true
   if (/^S\d+E\d+$/i.test(t)) return true
   return false
@@ -300,24 +303,26 @@ function analyze(url, ctx) {
   }
 }
 
+/** Single-line + LRM — prevents RTL digit scramble in Nuvio/Stremio */
 function formatLabel(info) {
-  const lines = []
-  lines.push(`${info.providerEmoji || '💎'} منبع: ${info.providerName || 'DigiMovie'}`)
-  const qParts = []
-  if (info.quality) qParts.push(info.quality)
-  if (info.source) qParts.push(info.source)
-  if (info.codec) qParts.push(info.codec)
-  if (info.bit10) qParts.push('10bit')
-  if (info.hdr) qParts.push('HDR')
-  if (qParts.length) lines.push(`📺 کیفیت: ${qParts.join(' ')}`)
-  if (info.audio === 'sub') lines.push('📝 زیرنویس: زیرنویس چسبیده فارسی')
-  if (info.audio === 'dub') lines.push('🎤 دوبله: دوبله فارسی')
-  if (info.size) lines.push(`📦 حجم: ${info.size}`)
-  if (info.encoder) lines.push(`⚙️ انکدر: ${info.encoder}`)
+  const LRM = '\u200E'
+  const parts = []
+  parts.push(`${info.providerEmoji || '💎'} ${info.providerName || 'DigiMovie'}`)
+  const q = []
+  if (info.quality) q.push(info.quality)
+  if (info.source) q.push(info.source)
+  if (info.codec) q.push(info.codec)
+  if (info.bit10) q.push('10bit')
+  if (info.hdr) q.push('HDR')
+  if (q.length) parts.push(LRM + q.join(' '))
+  if (info.audio === 'sub') parts.push('زیرنویس چسبیده')
+  if (info.audio === 'dub') parts.push('دوبله فارسی')
+  if (info.size) parts.push(LRM + String(info.size))
+  if (info.encoder) parts.push(String(info.encoder))
   if (info.season != null && info.episode != null) {
-    lines.push(`S${info.season}E${info.episode}`)
+    parts.push(LRM + `S${info.season}E${info.episode}`)
   }
-  return lines.join('\n')
+  return parts.join(' · ')
 }
 
 function qualityBadge(q) {
@@ -350,19 +355,27 @@ function isNoiseTitle(title) {
   if (NOISE_TITLE_IN.test(t)) return true
   if (/^[-–—>\s\u200c]+$/.test(t)) return true
   if ((t.match(/-/g) || []).length >= 4 && t.length < 40) return true
+  if (/^[\d\u06f0-\u06f9]{2,4}$/.test(t)) return true
   return false
 }
 
 function isNoisePath(pagePath) {
   const raw = String(pagePath).replace(/\/+$/, '')
-  const segs = raw.toLowerCase().split('/').filter(Boolean)
+  let decoded = raw
+  try {
+    decoded = decodeURIComponent(raw)
+  } catch {
+    /* keep */
+  }
+  const lower = decoded.toLowerCase()
+  const segs = lower.split('/').filter(Boolean)
   if (!segs.length) return true
-  if (NOISE_PATH_RE.test(raw)) return true
+  if (NOISE_PATH_RE.test(lower)) return true
+  if (/برتر|علاقه|هنرمند|اخبار|تماس|قوانین/.test(decoded)) return true
   if (segs.length === 1 && SECTION_ROOTS.has(segs[0])) return true
   if (segs.length >= 2 && SECTION_ROOTS.has(segs[0]) && segs[1] === 'page') return true
   if (segs[0] === 'serie' && segs.length === 1) return true
   if (segs[0] === 'category' || segs[0] === 'genre' || segs[0] === 'tag') return true
-  // encoded persian junk often in path for widgets — rare
   return false
 }
 
