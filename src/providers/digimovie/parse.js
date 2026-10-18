@@ -1,7 +1,7 @@
 /**
  * DigiMovie HTML parsers — digimoviez*.top WordPress theme.
  * Listing: main archive cards only. Reject sidebar episode tiles + dubbed promo rail.
- * Streams: quality-block size (movies 2.17 GB per row) + series group propagation.
+ * Streams: page-wide quality→size map (movies) + series group propagation.
  */
 
 const LRE = '\u202A'
@@ -243,8 +243,9 @@ export function parseDetailStreams(html, baseUrl) {
   const seen = new Set()
   const page = String(html || '')
 
-  // Digi movie layout per quality row:
-  // 1080p WEB-DL SoftSub · Encoder : DigiMoviez · 2.17 GB · Mkv · <a href=cdn>
+  // Page-wide map: quality → size (independent of where the CDN link sits)
+  const sizeMap = buildQualitySizeMap(page)
+
   const headerRe =
     /(2160p|1080p|720p|480p|360p)(?:\s*(?:Full\s*HD|10\s*bit|10bit|x265|x264|HEVC))*\s*(?:WEB-?DL|WEBRip|BluRay|HDRip|BRRip)?\s*(?:x265|x264|10\s*bit|10bit)?\s*(?:SoftSub|HardSub|دوبله|Dubbed)?/gi
 
@@ -253,115 +254,104 @@ export function parseDetailStreams(html, baseUrl) {
   while ((hm = headerRe.exec(page)) !== null) {
     headers.push({
       index: hm.index,
-      match: hm[0],
       quality: hm[1].toLowerCase().replace(/p$/i, '') + 'p',
+      raw: hm[0],
     })
   }
 
-  function blockMeta(from, to) {
-    const chunk = page.slice(from, to)
-    const plain = stripTags(chunk)
-    const source = match1(plain, /\b(WEB-?DL|WEBRip|BluRay|HDRip|BRRip)\b/i) || null
+  function metaNear(pos) {
+    let best = null
+    for (const h of headers) {
+      if (h.index <= pos) best = h
+      else break
+    }
+    const from = best ? best.index : Math.max(0, pos - 1500)
+    const to = Math.min(page.length, (best ? best.index : pos) + 900)
+    const plain = stripTags(page.slice(from, to))
+    const quality = best?.quality || match1(plain, /\b(2160p|1080p|720p|480p|360p)\b/i)
+    const source = match1(plain, /\b(WEB-?DL|WEBRip|BluRay|HDRip|BRRip)\b/i)
     const audio = /دوبله|Dubbed/i.test(plain)
       ? 'dub'
       : /SoftSub|HardSub|زیرنویس/i.test(plain)
         ? 'sub'
         : null
-    const size = extractSize(plain)
+    const codec = /x265|HEVC/i.test(plain) ? 'x265' : /x264/i.test(plain) ? 'x264' : null
+    const bit10 = /10\s*bit|10bit/i.test(plain)
     const encoder =
       match1(plain, /Encoder\s*[:=]\s*([A-Za-z0-9._-]+)/i) ||
       match1(plain, /\b(DigiMoviez?|PSA|Pahe|PaHe|FLUX|YTS|RARBG|N1H4L)\b/i) ||
       null
-    const codec = /x265|HEVC/i.test(plain) ? 'x265' : /x264/i.test(plain) ? 'x264' : null
-    const bit10 = /10\s*bit|10bit/i.test(plain)
-    const hdr = /\bHDR\b/i.test(plain)
     const season = (() => {
       const sn = match1(plain, /فصل\s*([\d\u06f0-\u06f9]+)/)
       return sn ? Number(toAsciiDigits(sn)) : null
     })()
+    let size =
+      lookupSize(sizeMap, quality, audio, source, codec) ||
+      nearestSizeBefore(page, pos) ||
+      extractSize(plain)
     return {
+      quality: quality || null,
       source: source ? String(source).replace(/WEBDL/i, 'WEB-DL') : null,
       audio,
-      size,
-      encoder,
       codec,
       bit10,
-      hdr,
+      encoder,
+      size,
       season,
     }
   }
 
-  for (let i = 0; i < headers.length; i++) {
-    const from = headers[i].index
-    const to =
-      i + 1 < headers.length ? headers[i + 1].index : Math.min(page.length, from + 6000)
-    const meta = blockMeta(from, to)
-    meta.quality = headers[i].quality
+  const aRe = /<a[^>]+href=["']([^"']+)["'][^>]*(?:>([\s\S]*?)<\/a>|(?:\s*\/>))/gi
+  let am
+  while ((am = aRe.exec(page)) !== null) {
+    const href = decodeHtml(am[1])
+    if (!isPlayableUrl(href)) continue
+    if (seen.has(href)) continue
+    seen.add(href)
 
-    const aRe = /<a[^>]+href=["']([^"']+)["'][^>]*(?:>([\s\S]*?)<\/a>|(?:\s*\/>))/gi
-    let am
-    const slice = page.slice(from, to)
-    while ((am = aRe.exec(slice)) !== null) {
-      const href = decodeHtml(am[1])
-      if (!isPlayableUrl(href)) continue
-      if (seen.has(href)) continue
-      seen.add(href)
+    const local = page.slice(Math.max(0, am.index - 500), am.index + am[0].length + 100)
+    const localText = stripTags(local) + ' ' + href
+    const info = analyze(href, localText)
+    const meta = metaNear(am.index)
 
-      const absIndex = from + am.index
-      const local = page.slice(Math.max(0, absIndex - 400), absIndex + am[0].length + 80)
-      const localText = stripTags(local) + ' ' + href
-      const info = analyze(href, localText)
+    if (meta.quality) info.quality = info.quality || meta.quality
+    if (meta.source) info.source = info.source || meta.source
+    if (meta.audio) info.audio = info.audio || meta.audio
+    if (meta.codec) info.codec = info.codec || meta.codec
+    if (meta.bit10) info.bit10 = true
+    if (meta.encoder) info.encoder = meta.encoder
+    if (meta.size) info.size = meta.size
+    else if (!info.size) info.size = extractSize(localText) || nearestSizeBefore(page, am.index)
 
-      if (meta.size) info.size = meta.size
-      else if (!info.size) info.size = extractSize(localText)
-      if (meta.quality) info.quality = meta.quality
-      if (meta.source) info.source = meta.source
-      if (meta.audio) info.audio = meta.audio
-      if (meta.encoder) info.encoder = meta.encoder
-      if (meta.codec) info.codec = meta.codec
-      if (meta.bit10) info.bit10 = true
-      if (meta.hdr) info.hdr = true
-
-      const se = href.match(/[Ss]0?(\d+)[Ee]0?(\d+)/)
-      if (se) {
-        info.season = Number(se[1])
-        info.episode = Number(se[2])
-      } else {
-        const epFa = match1(localText, /قسمت\s*([\d\u06f0-\u06f9]+)/)
-        if (epFa) info.episode = Number(toAsciiDigits(epFa))
-        const snFa = match1(localText, /فصل\s*([\d\u06f0-\u06f9]+)/)
-        if (snFa) info.season = Number(toAsciiDigits(snFa))
-        else if (meta.season != null) info.season = meta.season
-      }
-
-      out.push({
-        url: href,
-        ...info,
-        badge: qualityBadge(info.quality),
-      })
+    if (!info.size && info.quality) {
+      info.size = lookupSize(sizeMap, info.quality, info.audio, info.source, info.codec)
     }
-  }
 
-  if (out.length < 1) {
-    const aRe = /<a[^>]+href=["']([^"']+)["'][^>]*(?:>([\s\S]*?)<\/a>|(?:\s*\/>))/gi
-    let am
-    while ((am = aRe.exec(page)) !== null) {
-      const href = decodeHtml(am[1])
-      if (!isPlayableUrl(href)) continue
-      if (seen.has(href)) continue
-      seen.add(href)
-      const start = Math.max(0, am.index - 1200)
-      const local = page.slice(start, am.index + am[0].length + 200)
-      const localText = stripTags(local) + ' ' + href
-      const info = analyze(href, localText)
-      if (!info.size) info.size = extractSize(localText)
-      out.push({ url: href, ...info, badge: qualityBadge(info.quality) })
+    const se = href.match(/[Ss]0?(\d+)[Ee]0?(\d+)/)
+    if (se) {
+      info.season = Number(se[1])
+      info.episode = Number(se[2])
+    } else {
+      const epFa = match1(localText, /قسمت\s*([\d\u06f0-\u06f9]+)/)
+      if (epFa) info.episode = Number(toAsciiDigits(epFa))
+      const snFa = match1(localText, /فصل\s*([\d\u06f0-\u06f9]+)/)
+      if (snFa) info.season = Number(toAsciiDigits(snFa))
+      else if (meta.season != null) info.season = meta.season
     }
+
+    out.push({
+      url: href,
+      ...info,
+      badge: qualityBadge(info.quality),
+    })
   }
 
   propagateGroupMeta(out)
 
   for (const s of out) {
+    if (!s.size && s.quality) {
+      s.size = lookupSize(sizeMap, s.quality, s.audio, s.source, s.codec)
+    }
     s.label = formatLabel(s)
   }
 
@@ -371,6 +361,74 @@ export function parseDetailStreams(html, baseUrl) {
   }
   out.sort((a, b) => rank(b) - rank(a))
   return out
+}
+
+/** Scan whole page for quality headers + nearby size. */
+function buildQualitySizeMap(html) {
+  const map = new Map()
+  const plain = stripTags(html)
+  const re =
+    /(2160p|1080p|720p|480p|360p)([^]*?)(?=(?:2160p|1080p|720p|480p|360p)|$)/gi
+  let m
+  let guard = 0
+  while ((m = re.exec(plain)) !== null && guard++ < 80) {
+    const quality = m[1].toLowerCase().replace(/p$/i, '') + 'p'
+    const ctx = (m[1] + m[2]).slice(0, 500)
+    const size = extractSize(ctx)
+    if (!size) continue
+    const audio = /دوبله|Dubbed/i.test(ctx)
+      ? 'dub'
+      : /SoftSub|HardSub|زیرنویس/i.test(ctx)
+        ? 'sub'
+        : ''
+    const source = (match1(ctx, /\b(WEB-?DL|WEBRip|BluRay|HDRip|BRRip)\b/i) || '').replace(
+      /WEBDL/i,
+      'WEB-DL',
+    )
+    const codec = /x265|HEVC/i.test(ctx) ? 'x265' : /x264/i.test(ctx) ? 'x264' : ''
+    const keys = [
+      `${quality}|${audio}|${source}|${codec}`,
+      `${quality}|${audio}|${source}|`,
+      `${quality}|${audio}||`,
+      `${quality}|||`,
+    ]
+    for (const k of keys) {
+      if (!map.has(k)) map.set(k, size)
+    }
+  }
+  return map
+}
+
+function lookupSize(map, quality, audio, source, codec) {
+  if (!map || !quality) return null
+  const q = String(quality).toLowerCase().replace(/p$/i, '') + 'p'
+  const a = audio || ''
+  const s = source ? String(source).replace(/WEBDL/i, 'WEB-DL') : ''
+  const c = codec || ''
+  return (
+    map.get(`${q}|${a}|${s}|${c}`) ||
+    map.get(`${q}|${a}|${s}|`) ||
+    map.get(`${q}|${a}||`) ||
+    map.get(`${q}|||`) ||
+    null
+  )
+}
+
+/** Closest size token appearing before position in raw HTML. */
+function nearestSizeBefore(html, pos) {
+  const window = String(html).slice(Math.max(0, pos - 1800), pos)
+  const plain = stripTags(window)
+  const found = []
+  const re1 = /(\d+(?:[.,]\d+)?)\s*(GB|MB|گیگابایت|مگابایت|گیگ|مگ)/gi
+  let m
+  while ((m = re1.exec(plain)) !== null) {
+    found.push(normalizeSize(m[1].replace(',', '.') + ' ' + m[2]))
+  }
+  const re2 = /(GB|MB|گیگابایت|مگابایت|گیگ|مگ)\s*[:=]?\s*(\d+(?:[.,]\d+)?)/gi
+  while ((m = re2.exec(plain)) !== null) {
+    found.push(normalizeSize(m[2].replace(',', '.') + ' ' + m[1]))
+  }
+  return found.length ? found[found.length - 1] : null
 }
 
 /** Same quality+source+audio(+season) → share size & encoder across all streams. */
