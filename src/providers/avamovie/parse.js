@@ -4,6 +4,12 @@
 
 import { extractPosterFromCardHtml, normalizeAvaPosterUrl } from './poster.js'
 
+const LRE = '\u202A'
+const PDF = '\u202C'
+function ltr(text) {
+  return `${LRE}${text}${PDF}`
+}
+
 const AVA_HOSTS = new Set(['avadel.top', 'avamovie.shop', 'www.avamovie.shop'])
 
 const SECTION_ROOTS = new Set([
@@ -293,26 +299,32 @@ function analyze(url, ctx) {
   }
 }
 
-/** Single-line LTR-safe — avoids RTL number scramble in Nuvio/Stremio */
+/** Same multi-line layout as F2Media. */
 function formatLabel(info) {
-  const LRM = '\u200E'
-  const parts = []
-  parts.push(`${info.providerEmoji || '🎬'} ${info.providerName || 'AvaMovie'}`)
-  const q = []
-  if (info.quality) q.push(info.quality)
-  if (info.source) q.push(info.source)
-  if (info.codec) q.push(info.codec)
-  if (info.bit10) q.push('10bit')
-  if (info.hdr) q.push('HDR')
-  if (q.length) parts.push(LRM + q.join(' '))
-  if (info.audio === 'sub') parts.push('زیرنویس چسبیده')
-  if (info.audio === 'dub') parts.push('دوبله فارسی')
-  if (info.size) parts.push(LRM + String(info.size))
-  if (info.encoder) parts.push(String(info.encoder))
-  if (info.season != null && info.episode != null) {
-    parts.push(LRM + `S${info.season}E${info.episode}`)
+  const lines = []
+  const emoji = info.providerEmoji || '🎬'
+  const provider = info.providerName || 'AvaMovie'
+  lines.push(`${emoji} منبع: ${ltr(provider)}`)
+
+  const tech = []
+  if (info.quality) tech.push(String(info.quality))
+  if (info.hdr) tech.push('HDR')
+  if (info.bit10) tech.push('10bit')
+  if (info.source) tech.push(info.source)
+  if (info.codec) tech.push(info.codec)
+  if (tech.length) lines.push(`📊 کیفیت: ${ltr(tech.join(' · '))}`)
+
+  if (info.audio === 'sub') lines.push('📝 زیرنویس: زیرنویس چسبیده فارسی')
+  else if (info.audio === 'dub') lines.push('🎧 دوبله: دوبله فارسی')
+
+  if (info.encoder && !/^unknown$/i.test(info.encoder)) {
+    lines.push(`🎞️ انکدر: ${ltr(String(info.encoder))}`)
   }
-  return parts.join(' · ')
+  if (info.size) lines.push(`📦 سایز: ${ltr(String(info.size))}`)
+  if (info.season != null && info.episode != null) {
+    lines.push(ltr(`S${info.season}E${info.episode}`))
+  }
+  return lines.join('\n')
 }
 
 function qualityBadge(q) {
