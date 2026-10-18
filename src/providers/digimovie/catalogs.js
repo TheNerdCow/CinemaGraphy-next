@@ -41,29 +41,117 @@ export const DIGI_CATALOGS = [
   },
 ]
 
+/** ژانرهای رایج منوی دیجی — مسیر /genre/{slug}/ */
+export const DIGI_MOVIE_GENRES = [
+  'اکشن',
+  'انیمیشن',
+  'بیوگرافی',
+  'ترسناک',
+  'جنایی',
+  'درام',
+  'کمدی',
+  'علمی تخیلی',
+  'فانتزی',
+  'ماجراجویی',
+  'معمایی',
+  'هیجان انگیز',
+  'عاشقانه',
+  'جنگی',
+  'مستند',
+  'خانوادگی',
+  'وسترن',
+  'ورزشی',
+]
+
+export const DIGI_SERIES_GENRES = [
+  'اکشن',
+  'انیمیشن',
+  'ترسناک',
+  'جنایی',
+  'درام',
+  'کمدی',
+  'علمی تخیلی',
+  'فانتزی',
+  'ماجراجویی',
+  'معمایی',
+  'هیجان انگیز',
+  'عاشقانه',
+  'خانوادگی',
+]
+
+export const DIGI_GENRE_SLUGS = {
+  اکشن: 'اکشن',
+  انیمیشن: 'انیمیشن',
+  بیوگرافی: 'بیوگرافی',
+  ترسناک: 'ترسناک',
+  جنایی: 'جنایی',
+  درام: 'درام',
+  کمدی: 'کمدی',
+  'علمی تخیلی': 'علمی-تخیلی',
+  فانتزی: 'فانتزی',
+  ماجراجویی: 'ماجراجویی',
+  معمایی: 'معمایی',
+  'هیجان انگیز': 'هیجان-انگیز',
+  عاشقانه: 'عاشقانه',
+  جنگی: 'جنگی',
+  مستند: 'مستند',
+  خانوادگی: 'خانوادگی',
+  وسترن: 'وسترن',
+  ورزشی: 'ورزشی',
+}
+
+/** Items typically returned per archive page on Digi WP theme */
+export const DIGI_PAGE_SIZE = 20
+
 export function getCatalogById(id) {
   return DIGI_CATALOGS.find((c) => c.id === id) || null
 }
 
 export function toManifestCatalogs() {
-  return DIGI_CATALOGS.map((c) => ({
-    id: c.id,
-    type: c.type,
-    name: c.nameFa,
-    extra: [
+  return DIGI_CATALOGS.map((c) => {
+    const extra = [
       { name: 'search', isRequired: false },
       { name: 'skip', isRequired: false },
-    ],
-  }))
+    ]
+    if (c.kind === 'movies' || c.kind === 'indian') {
+      extra.unshift({
+        name: 'genre',
+        options: DIGI_MOVIE_GENRES,
+        isRequired: false,
+      })
+    } else if (c.kind === 'series') {
+      extra.unshift({
+        name: 'genre',
+        options: DIGI_SERIES_GENRES,
+        isRequired: false,
+      })
+    }
+    return {
+      id: c.id,
+      type: c.type,
+      name: c.nameFa,
+      extra,
+    }
+  })
 }
 
 export function catalogListUrl(base, catalog, page = 1) {
   const root = String(base).replace(/\/+$/, '')
   let path = catalog.path.startsWith('/') ? catalog.path : `/${catalog.path}`
-  // keep unicode category paths; ensure trailing slash for page 1
   if (page <= 1) {
     return root + (path.endsWith('/') ? path : path + '/')
   }
   const basePath = path.replace(/\/+$/, '')
   return `${root}${basePath}/page/${page}/`
+}
+
+export function genreListUrl(base, genreLabel, type, page = 1) {
+  const root = String(base).replace(/\/+$/, '')
+  const slug = DIGI_GENRE_SLUGS[genreLabel] || genreLabel
+  const encoded = encodeURI(slug)
+  // Digi often uses /genre/{name}/ with optional filter
+  const filter =
+    type === 'series' ? '?type=series' : type === 'movie' ? '?type=movie' : ''
+  if (page <= 1) return `${root}/genre/${encoded}/${filter}`
+  return `${root}/genre/${encoded}/page/${page}/${filter}`
 }
