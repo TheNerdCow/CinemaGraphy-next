@@ -40,6 +40,10 @@ const SECTION_ROOTS = new Set([
   'application',
   'artists',
   'artist',
+  'cast',
+  'casts',
+  'actor',
+  'actors',
   'news',
   'blog',
   'wishlist',
@@ -53,16 +57,16 @@ const SECTION_ROOTS = new Set([
 ])
 
 const NOISE_TITLE_RE =
-  /^(ورود|خروج|ثبت\s*نام|تماس(\s*با\s*ما)?|قوانین|DMCA(\s*POLICY)?|POLICY|CONTACT|Home|خانه|جستجو|Search|Login|Logout|APP|اپلیکیشن|هنرمندان|ARTISTS|لیست\s*علاقه(\s*مندی)?|باکس\s*آفیس|Box\s*Office|اخبار(\s*سینما)?(\s*و\s*هنرمندان)?|فیلم\s*برتر(\s*تاریخ)?\s*[۲۵2]50|سریال\s*برتر(\s*تاریخ)?\s*[۲۵2]50|Top\s*250|اعلان(ات)?|Notifications?)$/i
+  /^(ورود|خروج|ثبت\s*نام|تماس(\s*با\s*ما)?|قوانین|DMCA(\s*POLICY)?|POLICY|CONTACT|Home|خانه|جستجو|Search|Login|Logout|APP|اپلیکیشن|هنرمندان|بازیگران|ARTISTS|Cast|لیست\s*علاقه(\s*مندی)?|باکس\s*آفیس|Box\s*Office|اخبار(\s*سینما)?(\s*و\s*هنرمندان)?|فیلم\s*برتر(\s*تاریخ)?\s*[۲۵2]50|سریال\s*برتر(\s*تاریخ)?\s*[۲۵2]50|Top\s*250|اعلان(ات)?|Notifications?)$/i
 
 const NOISE_TITLE_IN =
-  /DMCA|CONTACT\s*US|تماس\s*با\s*ما|حریم\s*خصوصی|شرایط\s*استفاده|Privacy\s*Policy|Terms\s*of|برتر\s*تاریخ\s*[۲۵2]50|لیست\s*علاقه|اخبار\s*سینما|ARTISTS|هنرمندان|Top\s*250|باکس\s*آفیس|Box\s*Office|اعلان|Notification|منتشر\s*شد/i
+  /DMCA|CONTACT\s*US|تماس\s*با\s*ما|حریم\s*خصوصی|شرایط\s*استفاده|Privacy\s*Policy|Terms\s*of|برتر\s*تاریخ\s*[۲۵2]50|لیست\s*علاقه|اخبار\s*سینما|ARTISTS|هنرمندان|بازیگران|\bCast\b|Top\s*250|باکس\s*آفیس|Box\s*Office|اعلان|Notification|منتشر\s*شد/i
 
 const EPISODE_TITLE_RE =
   /^(قسمت\s*[\d\u06f0-\u06f9]+(\s*فصل\s*[\d\u06f0-\u06f9\w]+)?|فصل\s*[\d\u06f0-\u06f9]+(\s*قسمت\s*[\d\u06f0-\u06f9]+)?)/i
 
 const NOISE_PATH_RE =
-  /\b(contact|dmca|policy|privacy|terms|about|faq|login|register|account|dashboard|artists?|app|application|top-?250|250movie|250series|news|blog|wishlist|favorites?|box-?office|notifications?|announce)/i
+  /\b(contact|dmca|policy|privacy|terms|about|faq|login|register|account|dashboard|artists?|cast|casts|actors?|app|application|top-?250|250movie|250series|news|blog|wishlist|favorites?|box-?office|notifications?|announce)/i
 
 export function parseListingHtml(html, baseUrl, forceType) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
@@ -273,7 +277,6 @@ function isEpisodeTitle(title) {
   const t = String(title || '').trim()
   if (!t) return false
   if (EPISODE_TITLE_RE.test(t)) return true
-  // «قسمت 6 فصل چهارم منتشر شد» — update cards, not titles
   if (/قسمت/.test(t) && /فصل/.test(t)) return true
   if (/منتشر\s*شد/.test(t) && (/قسمت|فصل/.test(t) || t.length < 50)) return true
   if (/^S\d+E\d+$/i.test(t)) return true
@@ -315,14 +318,14 @@ function analyze(url, ctx) {
     bit10: Boolean(bit10),
     encoder,
     providerName: 'DigiMovie',
-    providerEmoji: '💎',
+    providerEmoji: '🎬',
   }
 }
 
 /** Same multi-line layout as F2Media (Nuvio/Stremio friendly + LTR digits). */
 function formatLabel(info) {
   const lines = []
-  const emoji = info.providerEmoji || '💎'
+  const emoji = info.providerEmoji || '🎬'
   const provider = info.providerName || 'DigiMovie'
   lines.push(`${emoji} منبع: ${ltr(provider)}`)
 
@@ -393,7 +396,9 @@ function isNoisePath(pagePath) {
   const segs = lower.split('/').filter(Boolean)
   if (!segs.length) return true
   if (NOISE_PATH_RE.test(lower)) return true
-  if (/برتر|علاقه|هنرمند|اخبار|تماس|قوانین|باکس|اعلان|افیس/.test(decoded)) return true
+  if (/برتر|علاقه|هنرمند|بازیگر|اخبار|تماس|قوانین|باکس|اعلان|افیس|\bcast\b/.test(decoded)) {
+    return true
+  }
   if (segs.length === 1 && SECTION_ROOTS.has(segs[0])) return true
   if (segs.length >= 2 && SECTION_ROOTS.has(segs[0]) && segs[1] === 'page') return true
   if (segs[0] === 'serie' && segs.length === 1) return true
