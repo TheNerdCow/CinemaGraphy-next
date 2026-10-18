@@ -85,6 +85,7 @@ export const DIGI_GENRE_SLUGS = {
   ورزشی: 'ورزشی',
 }
 
+/** Keep in sync with actual archive page size so skip→page maps cleanly. */
 export const DIGI_PAGE_SIZE = 12
 
 export function getCatalogById(id) {
@@ -93,10 +94,11 @@ export function getCatalogById(id) {
 
 export function toManifestCatalogs() {
   return DIGI_CATALOGS.map((c) => {
-    const extra = [
-      { name: 'search', isRequired: false },
-      { name: 'skip', isRequired: false },
-    ]
+    // Search only on main film/series — not anime/korean/indian (avoids global search spam)
+    const extra = [{ name: 'skip', isRequired: false }]
+    if (c.kind === 'movies' || c.kind === 'series') {
+      extra.unshift({ name: 'search', isRequired: false })
+    }
     if (c.kind === 'movies' || c.kind === 'indian') {
       extra.unshift({
         name: 'genre',
