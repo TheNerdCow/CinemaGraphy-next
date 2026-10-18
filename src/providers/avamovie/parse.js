@@ -6,47 +6,12 @@ import { extractPosterFromCardHtml, normalizeAvaPosterUrl } from './poster.js'
 
 const AVA_HOSTS = new Set(['avadel.top', 'avamovie.shop', 'www.avamovie.shop'])
 
-/** Pure section roots (not detail pages). */
 const SECTION_ROOTS = new Set([
-  'movies',
-  'series',
-  'genre',
-  'category',
-  'tag',
-  'person',
-  'peoples',
-  'account',
-  'login',
-  'logout',
-  'buy-subscription',
-  'streams',
-  'anime',
-  'animation',
-  'doc',
-  'oscar',
-  'boxoffice',
-  'collections',
-  'list',
-  'country',
-  'movie-dub',
-  'series-dub',
-  '250movie',
-  '250series',
-  'east-asian-series',
-  'series-status',
-  'wp-admin',
-  'wp-content',
-  'page',
-  'contact',
-  'dmca',
-  'rules',
-  'application',
-  'app',
-  'terms',
-  'privacy',
-  'register',
-  'cart',
-  'checkout',
+  'movies','series','genre','category','tag','person','peoples','account','login','logout',
+  'buy-subscription','streams','anime','animation','doc','oscar','boxoffice','collections',
+  'list','country','movie-dub','series-dub','250movie','250series','east-asian-series',
+  'series-status','wp-admin','wp-content','page','contact','dmca','rules','application',
+  'app','terms','privacy','register','cart','checkout',
 ])
 
 const NOISE_TITLES =
@@ -56,7 +21,6 @@ export function parseListingHtml(html, baseUrl, forceType) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const results = []
   const seen = new Set()
-
   let scope = html
   const arch = html.match(
     /class="[^"]*archive-posts[^"]*"[\s\S]*?(?=<footer|class="[^"]*site-pagination|id="footer|$)/i,
@@ -88,10 +52,7 @@ export function parseListingHtml(html, baseUrl, forceType) {
     const yearRaw = match1(block, /class=["']year["'][^>]*>([\s\S]*?)<\/div>/i) || ''
     const year =
       extractYear(yearRaw) || extractYear(titleAttr || '') || extractYear(title)
-
-    // Public CDN rewrite (Amazon) — same role as F2Media intocdn posters
     const poster = extractPosterFromCardHtml(block, base)
-
     const type =
       forceType ||
       (/^series\//i.test(pagePath) || /\banime\b/i.test(pagePath) ? 'series' : 'movie')
@@ -132,7 +93,6 @@ export function parseListingHtml(html, baseUrl, forceType) {
       if (results.length >= 40) break
     }
   }
-
   return results
 }
 
@@ -174,7 +134,6 @@ export function parseDetailStreams(html, baseUrl) {
   const base = String(baseUrl || '').replace(/\/+$/, '')
   const out = []
   const seen = new Set()
-
   const boxes = []
   const boxRe =
     /class="[^"]*downloadbox[^"]*"[\s\S]*?(?=class="[^"]*single-related|class="[^"]*downloadbox|<footer|$)/gi
@@ -203,11 +162,8 @@ export function parseDetailStreams(html, baseUrl) {
         }
       }
     }
-    if (!foundSeason) {
-      collectMovieLinks(box, base, out, seen)
-    }
+    if (!foundSeason) collectMovieLinks(box, base, out, seen)
   }
-
   collectMovieLinks(html, base, out, seen)
 
   const rank = (s) => {
@@ -226,12 +182,7 @@ export function buildSeriesVideos(streams) {
     const episode = Number(s.episode)
     const key = `${season}:${episode}`
     if (!map.has(key)) {
-      map.set(key, {
-        season,
-        episode,
-        title: `S${season}E${episode}`,
-        streams: [],
-      })
+      map.set(key, { season, episode, title: `S${season}E${episode}`, streams: [] })
     }
     map.get(key).streams.push(s)
   }
@@ -264,18 +215,11 @@ function collectMovieLinks(html, base, out, seen) {
     if (seen.has(href)) continue
     const isAudioOnly = /\.(mka|aac|mp3)(\?|$)/i.test(href)
     seen.add(href)
-
     const start = Math.max(0, am.index - 500)
     const local = html.slice(start, am.index + (am[0]?.length || 0) + 120)
-    const localText = stripTags(local) + ' ' + href
-    const info = analyze(href, localText)
+    const info = analyze(href, stripTags(local) + ' ' + href)
     info.isAudioOnly = isAudioOnly
-    out.push({
-      url: href,
-      ...info,
-      label: formatLabel(info),
-      badge: qualityBadge(info.quality),
-    })
+    out.push({ url: href, ...info, label: formatLabel(info), badge: qualityBadge(info.quality) })
   }
 }
 
@@ -289,7 +233,6 @@ function collectEpisodeLinks(block, base, out, seen, season) {
     if (seen.has(href)) continue
     const isAudioOnly = /\.(mka|aac|mp3)(\?|$)/i.test(href)
     seen.add(href)
-
     const full = href.match(/[Ss]0?(\d+)[Ee]0?(\d+)/)
     let episode = null
     let seasonNum = season
@@ -301,19 +244,13 @@ function collectEpisodeLinks(block, base, out, seen, season) {
         match1(am[2] || '', /(\d+)/) || match1(am[3] || '', /قسمت\s*([\d\u06f0-\u06f9]+)/)
       if (epFromTitle) episode = Number(toAsciiDigits(epFromTitle))
     }
-
     const start = Math.max(0, am.index - 400)
     const local = block.slice(start, am.index + (am[0]?.length || 0) + 80)
     const info = analyze(href, stripTags(local) + ' ' + href)
     info.season = seasonNum
     info.episode = episode
     info.isAudioOnly = isAudioOnly
-    out.push({
-      url: href,
-      ...info,
-      label: formatLabel(info),
-      badge: qualityBadge(info.quality),
-    })
+    out.push({ url: href, ...info, label: formatLabel(info), badge: qualityBadge(info.quality) })
   }
 }
 
@@ -356,24 +293,26 @@ function analyze(url, ctx) {
   }
 }
 
+/** Single-line LTR-safe — avoids RTL number scramble in Nuvio/Stremio */
 function formatLabel(info) {
-  const lines = []
-  lines.push(`${info.providerEmoji || '🎬'} منبع: ${info.providerName || 'AvaMovie'}`)
-  const qParts = []
-  if (info.quality) qParts.push(info.quality)
-  if (info.source) qParts.push(info.source)
-  if (info.codec) qParts.push(info.codec)
-  if (info.bit10) qParts.push('10bit')
-  if (info.hdr) qParts.push('HDR')
-  if (qParts.length) lines.push(`📺 کیفیت: ${qParts.join(' ')}`)
-  if (info.audio === 'sub') lines.push('📝 زیرنویس: زیرنویس چسبیده فارسی')
-  if (info.audio === 'dub') lines.push('🎤 دوبله: دوبله فارسی')
-  if (info.size) lines.push(`📦 حجم: ${info.size}`)
-  if (info.encoder) lines.push(`⚙️ انکدر: ${info.encoder}`)
+  const LRM = '\u200E'
+  const parts = []
+  parts.push(`${info.providerEmoji || '🎬'} ${info.providerName || 'AvaMovie'}`)
+  const q = []
+  if (info.quality) q.push(info.quality)
+  if (info.source) q.push(info.source)
+  if (info.codec) q.push(info.codec)
+  if (info.bit10) q.push('10bit')
+  if (info.hdr) q.push('HDR')
+  if (q.length) parts.push(LRM + q.join(' '))
+  if (info.audio === 'sub') parts.push('زیرنویس چسبیده')
+  if (info.audio === 'dub') parts.push('دوبله فارسی')
+  if (info.size) parts.push(LRM + String(info.size))
+  if (info.encoder) parts.push(String(info.encoder))
   if (info.season != null && info.episode != null) {
-    lines.push(`S${info.season}E${info.episode}`)
+    parts.push(LRM + `S${info.season}E${info.episode}`)
   }
-  return lines.join('\n')
+  return parts.join(' · ')
 }
 
 function qualityBadge(q) {
@@ -409,11 +348,7 @@ function isNoiseTitle(title) {
 }
 
 function isNoisePath(pagePath) {
-  const segs = String(pagePath)
-    .replace(/\/+$/, '')
-    .toLowerCase()
-    .split('/')
-    .filter(Boolean)
+  const segs = String(pagePath).replace(/\/+$/, '').toLowerCase().split('/').filter(Boolean)
   if (!segs.length) return true
   if (segs.length === 1 && SECTION_ROOTS.has(segs[0])) return true
   if (segs.length >= 2 && SECTION_ROOTS.has(segs[0]) && segs[1] === 'page') return true
@@ -424,18 +359,12 @@ function isNoisePath(pagePath) {
 }
 
 function safeDecode(s) {
-  try {
-    return decodeURIComponent(s)
-  } catch {
-    return s
-  }
+  try { return decodeURIComponent(s) } catch { return s }
 }
 
 function isLikelyDetailPath(pagePath) {
   const segs = String(pagePath).split('/').filter(Boolean)
-  if (segs.length === 1 && segs[0].length > 3 && !SECTION_ROOTS.has(segs[0].toLowerCase())) {
-    return true
-  }
+  if (segs.length === 1 && segs[0].length > 3 && !SECTION_ROOTS.has(segs[0].toLowerCase())) return true
   if (segs[0] === 'series' && segs.length >= 2 && segs[1] !== 'page') return true
   return false
 }
@@ -453,12 +382,7 @@ function toAsciiDigits(s) {
 
 function normalizeSize(s) {
   if (!s) return null
-  return String(s)
-    .replace(/گیگابایت/i, 'GB')
-    .replace(/مگابایت/i, 'MB')
-    .replace(/گیگ/i, 'GB')
-    .replace(/مگ/i, 'MB')
-    .trim()
+  return String(s).replace(/گیگابایت/i, 'GB').replace(/مگابایت/i, 'MB').replace(/گیگ/i, 'GB').replace(/مگ/i, 'MB').trim()
 }
 
 function sameSite(a, b) {
@@ -468,26 +392,18 @@ function sameSite(a, b) {
     if (ha === hb) return true
     if (AVA_HOSTS.has(ha) && AVA_HOSTS.has(hb)) return true
     return false
-  } catch {
-    return false
-  }
+  } catch { return false }
 }
 
 function resolveUrl(base, href) {
-  try {
-    return new URL(href, base.endsWith('/') ? base : base + '/').toString()
-  } catch {
-    return null
-  }
+  try { return new URL(href, base.endsWith('/') ? base : base + '/').toString() } catch { return null }
 }
 
 function pathFromUrl(abs, base) {
   try {
     const u = new URL(abs)
     return (u.pathname.replace(/^\/+/, '') + u.search).replace(/\/+$/, '')
-  } catch {
-    return null
-  }
+  } catch { return null }
 }
 
 function extractYear(text) {
@@ -517,10 +433,7 @@ function stripTags(s) {
 }
 
 function decodeHtml(s) {
-  return String(s)
-    .replace(/&/g, '&')
-    .replace(/"/g, '"')
-    .replace(/&#39;/g, "'")
+  return String(s).replace(/&/g, '&').replace(/"/g, '"').replace(/&#39;/g, "'")
 }
 
 function match1(s, re) {
