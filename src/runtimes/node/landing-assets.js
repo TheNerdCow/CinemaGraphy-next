@@ -1,6 +1,6 @@
-/** Paths for static brand assets */
-export const ASSET_BG = '/assets/Bg.jpg'
-export const ASSET_LOGO = '/assets/MainLogo.jpg'
-export const ASSET_MARK = '/assets/favandinstall.png'
-export const ASSET_FAV = '/assets/favandinstall.png'
-export const ASSET_DIGI_FAV = '/assets/cropped-digi-fav-32x32.png'
+/** Paths for static brand assets (GitHub Raw + Local Fallback) */
+export const ASSET_BG = 'https://github.com/TheNerdCow/CinemaGraphy-next/blob/main/src/runtimes/node/assets/Bg.jpg?raw=true'
+export const ASSET_LOGO = 'https://github.com/TheNerdCow/CinemaGraphy-next/blob/main/src/runtimes/node/assets/favandinstall.png?raw=true'
+export const ASSET_MARK = 'https://github.com/TheNerdCow/CinemaGraphy-next/blob/main/src/runtimes/node/assets/favandinstall.png?raw=true'
+export const ASSET_FAV = 'https://github.com/TheNerdCow/CinemaGraphy-next/blob/main/src/runtimes/node/assets/favandinstall.png?raw=true'
+export const ASSET_DIGI_FAV = 'https://github.com/TheNerdCow/CinemaGraphy-next/blob/main/src/runtimes/node/assets/cropped-digi-fav-32x32.png?raw=true'
