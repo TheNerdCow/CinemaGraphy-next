@@ -1,1 +1,1 @@
-export const ASSET_LOGO = "data:image/webp;base64,PLACEHOLDER_TOO_LARGE_SEE_LOCAL"
+PLACEHOLDER
