@@ -1,12 +1,14 @@
 /**
- * CinemaGraphy NEXT — Cloudflare Workers & Vercel Entry Point
- * 100% Serverless & Native CF Workers Compatible
+ * CinemaGraphy NEXT — Native Cloudflare Workers Runtime
+ * Fixes:
+ * 1. Public & Personal /manifest.json generation & Stremio installation
+ * 2. Web-standard Base64URL encoding/decoding (no Node Buffer needed)
+ * 3. Direct asset serving & complete catalog/meta/stream routing
  */
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { getCookie, setCookie } from 'hono/cookie'
 
-// Core & Providers
 import { configFromEnv, decodeUserConfig, encodeUserConfig, applyMode } from './src/core/config/app-config.js'
 import { createLogger } from './src/core/logging/logger.js'
 import { buildStremioManifest } from './src/clients/stremio/manifest.js'
@@ -19,6 +21,7 @@ import { createAvaMovieProvider } from './src/providers/avamovie/index.js'
 import { createDigiMovieProvider } from './src/providers/digimovie/index.js'
 import { fromStremioProviderId, toStremioProviderId } from './src/core/ids/namespace.js'
 import { renderLanding } from './src/runtimes/node/landing.js'
+import { ASSET_BG, ASSET_MARK, ASSET_DIGI_FAV } from './src/runtimes/node/landing-assets.js'
 
 const log = createLogger('info')
 const VERSION = '0.6.6'
@@ -35,24 +38,88 @@ registerProvider(createDigiMovieProvider({ logger: log }))
 
 function deepMergeProviders(a = {}, b = {}) {
   const out = { ...a }
-  for (const [k, v] of Object.entries(b || {})) out[k] = { ...(out[k] || {}), ...(v || {}) }
+  for (const [k, v] of Object.entries(b || {})) {
+    out[k] = { ...(out[k] || {}), ...(v || {}) }
+  }
   return out
 }
 
-function getEnv(c) { return c.env || {} }
+// انکودر و دیکودر ۱۰۰٪ سازگار با Cloudflare Workers (بدون نیاز به Buffer نود)
+function safeEncodeConfig(cfg) {
+  try {
+    const t = encodeUserConfig(cfg)
+    if (t) return t
+  } catch {}
+  try {
+    const json = JSON.stringify(cfg)
+    const bytes = new TextEncoder().encode(json)
+    let bin = ''
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  } catch {
+    return null
+  }
+}
+
+function safeDecodeConfig(token) {
+  if (!token) return null
+  try {
+    const d = decodeUserConfig(token)
+    if (d) return d
+  } catch {}
+  try {
+    let b64 = String(token).replace(/-/g, '+').replace(/_/g, '/')
+    while (b64.length % 4) b64 += '='
+    const bin = atob(b64)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    return JSON.parse(new TextDecoder().decode(bytes))
+  } catch {
+    return null
+  }
+}
+
+function getBaseServerConfig(c) {
+  const env = c?.env || {}
+  const base = configFromEnv(env) || {}
+  const defaultProviders = {
+    f2media: { enabled: true, baseUrl: 'https://www.myf2ms.top' },
+    cinamatic: { enabled: true, baseUrl: 'https://cinamatic.top' },
+    aslmoviez: { enabled: true, baseUrl: 'https://aslmoviez.com' },
+    avamovie: { enabled: false, baseUrl: 'https://avadel.top' },
+    digimovie: { enabled: false, baseUrl: 'https://digimoviez53.top' },
+  }
+  return {
+    ...base,
+    providersEnabled: base.providersEnabled?.length ? base.providersEnabled : [...FREE_PROVIDERS],
+    providers: deepMergeProviders(defaultProviders, base.providers || {}),
+  }
+}
 
 function resolveConfig(c) {
-  const env = getEnv(c)
-  const server = configFromEnv(env)
+  const server = getBaseServerConfig(c)
   const token = c.req.param('config') || c.req.query('config')
-  const overlay = token ? decodeUserConfig(token) : null
+  const overlay = token ? safeDecodeConfig(token) : null
   let cfg = server
   if (overlay) {
+    const enabledList = overlay.providersEnabled?.length
+      ? overlay.providersEnabled
+      : server.providersEnabled
+    const mergedProviders = deepMergeProviders(server.providers, overlay.providers)
+    for (const k of ALL_PROVIDER_KEYS) {
+      mergedProviders[k] = {
+        ...(mergedProviders[k] || {}),
+        enabled: enabledList.includes(k),
+      }
+    }
     cfg = applyMode({
       ...server,
       ...overlay,
-      providers: deepMergeProviders(server.providers, overlay.providers),
-      providersEnabled: overlay.providersEnabled?.length ? overlay.providersEnabled : server.providersEnabled,
+      resources: { ...(server.resources || {}), ...(overlay.resources || {}) },
+      meta: { ...(server.meta || {}), ...(overlay.meta || {}) },
+      ui: { ...(server.ui || {}), ...(overlay.ui || {}) },
+      providers: mergedProviders,
+      providersEnabled: enabledList,
     })
   }
   if (!cfg.providers?.avamovie?.cookie) {
@@ -70,33 +137,37 @@ function buildPersonalConfig({ providersEnabled, avaCookie, digiCookie, avaBaseU
   const enabled = (providersEnabled || []).filter((k) => ALL_PROVIDER_KEYS.includes(k))
   const unique = [...new Set(enabled.length ? enabled : FREE_PROVIDERS)]
   const providers = {}
-  for (const k of unique) providers[k] = { enabled: true }
-  
   const ava = String(avaCookie || '').trim()
   const digi = String(digiCookie || '').trim()
   const avaBase = String(avaBaseUrl || '').trim()
   const digiBase = String(digiBaseUrl || '').trim()
-  
+
   if (unique.includes('avamovie')) {
-    if (!ava) delete providers.avamovie
+    if (!ava) unique.splice(unique.indexOf('avamovie'), 1)
     else {
-      providers.avamovie.cookie = ava.slice(0, 4096)
+      providers.avamovie = { cookie: ava.slice(0, 4096), enabled: true }
       if (avaBase.startsWith('http')) providers.avamovie.baseUrl = avaBase.replace(/\/+$/, '').slice(0, 200)
     }
   }
   if (unique.includes('digimovie')) {
-    if (!digi) delete providers.digimovie
+    if (!digi) unique.splice(unique.indexOf('digimovie'), 1)
     else {
-      providers.digimovie.cookie = digi.slice(0, 4096)
+      providers.digimovie = { cookie: digi.slice(0, 4096), enabled: true }
       if (digiBase.startsWith('http')) providers.digimovie.baseUrl = digiBase.replace(/\/+$/, '').slice(0, 200)
     }
   }
-  return { providersEnabled: Object.keys(providers), providers }
+  return { providersEnabled: unique, providers: Object.keys(providers).length ? providers : undefined }
+}
+
+function getPublicOrigin(c) {
+  const url = new URL(c.req.url)
+  const proto = (c.req.header('x-forwarded-proto') || url.protocol.replace(':', '') || 'https').split(',')[0].trim()
+  const host = c.req.header('x-forwarded-host') || c.req.header('host') || url.host
+  return `${proto}://${host}`
 }
 
 function landingHtml(opts = {}, c) {
-  const url = new URL(c.req.url)
-  const hostManifest = `${url.protocol}//${url.host}/manifest.json`
+  const hostManifest = `${getPublicOrigin(c)}/manifest.json`
   return renderLanding({
     version: VERSION,
     freeProviders: FREE_PROVIDERS,
@@ -114,7 +185,13 @@ function landingHtml(opts = {}, c) {
 function toMetas(items, providerKey) {
   return (items || []).map((it) => {
     const itemId = String(it.internalId || '').replace(new RegExp('^cg:' + providerKey + ':'), '')
-    return { id: toStremioProviderId(providerKey, itemId), type: it.type, name: it.title, poster: it.poster, releaseInfo: it.year ? String(it.year) : undefined }
+    return {
+      id: toStremioProviderId(providerKey, itemId),
+      type: it.type,
+      name: it.title,
+      poster: it.poster,
+      releaseInfo: it.year ? String(it.year) : undefined,
+    }
   })
 }
 
@@ -123,10 +200,15 @@ async function checkDomainReachable(url) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 5000)
   try {
-    await fetch(url, { method: 'GET', redirect: 'follow', signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0' } })
+    await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+    })
     clearTimeout(timeout)
     return true
-  } catch (err) {
+  } catch {
     clearTimeout(timeout)
     return false
   }
@@ -135,14 +217,22 @@ async function checkDomainReachable(url) {
 const app = new Hono()
 app.use('*', cors())
 
+// فال‌بک برای فایل‌های عکس در کلادفلر
+app.get('/assets/:file', (c) => {
+  const f = c.req.param('file')
+  if (f === 'Bg.jpg') return c.redirect(ASSET_BG, 302)
+  if (f === 'cropped-digi-fav-32x32.png') return c.redirect(ASSET_DIGI_FAV, 302)
+  return c.redirect(ASSET_MARK, 302)
+})
+
 app.get('/', (c) => c.html(landingHtml({}, c)))
 app.get('/configure', (c) => c.html(landingHtml({}, c)))
+app.get('/c/:config/configure', (c) => c.html(landingHtml({}, c)))
 
 app.get('/api/sources-status', async (c) => {
   const now = Date.now()
   if (statusCache.data && now - statusCache.ts < 60_000) return c.json(statusCache.data)
-  const env = getEnv(c)
-  const cfg = configFromEnv(env)
+  const cfg = getBaseServerConfig(c)
   const domains = {
     f2media: cfg.providers?.f2media?.baseUrl || 'https://www.myf2ms.top',
     cinamatic: cfg.providers?.cinamatic?.baseUrl || 'https://cinamatic.top',
@@ -157,30 +247,35 @@ app.get('/api/sources-status', async (c) => {
 })
 
 app.post('/configure', async (c) => {
-  const body = await c.req.parseBody()
-  let providers = body.providers
+  const body = await c.req.parseBody({ all: true })
+  let providers = body['providers'] || body['providers[]']
   if (!providers) providers = []
   if (!Array.isArray(providers)) providers = [providers]
   providers = providers.map(String).filter((k) => ALL_PROVIDER_KEYS.includes(k))
-  
+
   const cookie = String(body.avaCookie || '').trim()
   const digiCookie = String(body.digiCookie || '').trim()
-  const avaBase = String(body.avaBaseUrl || 'https://avadel.top').trim()
-  const digiBase = String(body.digiBaseUrl || 'https://digimoviez53.top').trim()
+  const avaBase = String(body.avaBaseUrl || '').trim()
+  const digiBase = String(body.digiBaseUrl || '').trim()
 
   if (!providers.length) providers = [...FREE_PROVIDERS]
-  if (providers.includes('avamovie') && !cookie) return c.html(landingHtml({ flash: { ok: false, msg: 'آوا تیک خورده ولی کوکی خالی است' }, selected: providers, digiCookieValue: digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, c))
-  if (providers.includes('digimovie') && !digiCookie) return c.html(landingHtml({ flash: { ok: false, msg: 'دیجی تیک خورده ولی کوکی خالی است' }, selected: providers, cookieValue: cookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, c))
+  if (providers.includes('avamovie') && !cookie) {
+    return c.html(landingHtml({ flash: { ok: false, msg: 'آوا تیک خورده ولی کوکی خالی است' }, selected: providers, digiCookieValue: digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, c))
+  }
+  if (providers.includes('digimovie') && !digiCookie) {
+    return c.html(landingHtml({ flash: { ok: false, msg: 'دیجی تیک خورده ولی کوکی خالی است' }, selected: providers, cookieValue: cookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, c))
+  }
 
   const cfg = buildPersonalConfig({ providersEnabled: providers, avaCookie: cookie, digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase })
-  const token = encodeUserConfig(cfg)
-  if (!token) return c.html(landingHtml({ flash: { ok: false, msg: 'ساخت کانفیگ ناموفق بود' }, selected: providers }, c))
+  const token = safeEncodeConfig(cfg)
+  if (!token) {
+    return c.html(landingHtml({ flash: { ok: false, msg: 'ساخت کانفیگ ناموفق بود' }, selected: providers }, c))
+  }
 
-  if (cookie) setCookie(c, 'avamovie', cookie)
-  if (digiCookie) setCookie(c, 'digimovie', digiCookie)
+  if (cookie) setCookie(c, 'avamovie', cookie, { path: '/', maxAge: 604800 })
+  if (digiCookie) setCookie(c, 'digimovie', digiCookie, { path: '/', maxAge: 604800 })
 
-  const url = new URL(c.req.url)
-  const personalPath = `${url.protocol}//${url.host}/c/${token}/manifest.json`
+  const personalPath = `${getPublicOrigin(c)}/c/${token}/manifest.json`
   return c.html(landingHtml({
     flash: { ok: true, msg: 'مانیفست شخصی آماده است — نصب کن یا لینک را کپی کن' },
     personalPath,
@@ -193,22 +288,36 @@ app.post('/configure', async (c) => {
 })
 
 app.post('/session/clear', (c) => {
-  setCookie(c, 'avamovie', '', { maxAge: 0 })
-  setCookie(c, 'digimovie', '', { maxAge: 0 })
+  setCookie(c, 'avamovie', '', { path: '/', maxAge: 0 })
+  setCookie(c, 'digimovie', '', { path: '/', maxAge: 0 })
   return c.html(landingHtml({ flash: { ok: true, msg: 'نشست سرور پاک شد' } }, c))
 })
 
-app.get('/health', (c) => c.json({ ok: true, service: 'cinemagraphy-next', version: VERSION }))
+app.get('/health', (c) => {
+  const cfg = getBaseServerConfig(c)
+  return c.json({
+    ok: true,
+    service: 'cinemagraphy-next',
+    version: VERSION,
+    providers: listEnabledProviders(cfg).map((p) => p.key),
+  })
+})
 
 const manifestHandler = (c) => {
   try {
     const cfg = resolveConfig(c)
-    const providers = listEnabledProviders(cfg).map((p) => ({ key: p.key, name: p.name, capabilities: p.capabilities }))
+    let enabled = listEnabledProviders(cfg)
+    if (!enabled.length) {
+      enabled = FREE_PROVIDERS.map((k) => getProvider(k)).filter(Boolean)
+    }
+    const providers = enabled.map((p) => ({
+      key: p.key,
+      name: p.name,
+      capabilities: p.capabilities,
+    }))
     const manifest = buildStremioManifest(cfg, providers)
-    
-    // لینک مستقیم لوگو از گیت‌هاب (برای جلوگیری از خطای یافت نشدن عکس در محیط‌های سرورلس)
-    manifest.logo = 'https://raw.githubusercontent.com/TheNerdCow/CinemaGraphy-next/main/src/runtimes/node/assets/favandinstall.png'
-    manifest.icon = manifest.logo
+    manifest.logo = ASSET_MARK
+    manifest.icon = ASSET_MARK
     manifest.version = VERSION
     return c.json(manifest)
   } catch (err) {
@@ -221,12 +330,13 @@ const catalogHandler = async (c) => {
   try {
     const cfg = resolveConfig(c)
     const type = c.req.param('type')
-    let id = String(c.req.param('id') || '').replace('.json', '')
-    
+    let id = String(c.req.param('id') || '')
+    if (id.endsWith('.json')) id = id.slice(0, -5)
+
     const extraArgs = c.req.param('extraArgs') || ''
     const extra = {}
     if (extraArgs) {
-      const raw = extraArgs.replace('.json', '')
+      const raw = extraArgs.endsWith('.json') ? extraArgs.slice(0, -5) : extraArgs
       for (const part of raw.split('&')) {
         const eq = part.indexOf('=')
         if (eq < 0) continue
@@ -236,26 +346,55 @@ const catalogHandler = async (c) => {
       }
     }
     const search = extra.search ? String(extra.search) : ''
-    const genre = (extra.genre && !/^all$/i.test(extra.genre)) ? String(extra.genre) : ''
+    const genreRaw = extra.genre ? String(extra.genre) : ''
+    const genre = genreRaw && !/^all$/i.test(genreRaw) ? genreRaw : ''
     const skip = extra.skip ? Number(extra.skip) : 0
+
+    const typeCatalog = id.match(/^([a-z0-9]+)_(movies|series)$/i)
+    if (typeCatalog) {
+      const providerKey = typeCatalog[1].toLowerCase()
+      const provider = getProvider(providerKey)
+      if (!provider || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) {
+        return c.json({ metas: [] })
+      }
+      const wantType = type === 'series' ? 'series' : 'movie'
+      let items = []
+      if (search && provider.search) {
+        items = await provider.search(search, { config: cfg, skip, timeoutMs: 18000 })
+        items = (items || []).filter((it) => (it.type || wantType) === wantType)
+      } else if (genre && provider.browseGenre) {
+        items = await provider.browseGenre(wantType, genre, { config: cfg, skip, timeoutMs: 18000 })
+      } else if (provider.browseType) {
+        items = await provider.browseType(wantType, { config: cfg, skip, timeoutMs: 18000 })
+      }
+      return c.json({ metas: toMetas(items, providerKey) })
+    }
 
     let providerKey = null
     for (const k of ALL_PROVIDER_KEYS) {
-      if (id.startsWith(k + '_') || id.includes(':' + k + ':')) { providerKey = k; break; }
+      if (id.startsWith(k + '_')) {
+        providerKey = k
+        break
+      }
     }
-    
     if (providerKey) {
       const provider = getProvider(providerKey)
-      if (!provider || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) return c.json({ metas: [] })
-      
+      if (!provider || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) {
+        return c.json({ metas: [] })
+      }
       let items = []
       const wantType = type === 'series' ? 'series' : 'movie'
-      if (search && provider.search) items = await provider.search(search, { config: cfg, skip, timeoutMs: 22000 })
-      else if (genre && provider.browseGenre) items = await provider.browseGenre(wantType, genre, { config: cfg, skip, timeoutMs: 22000 })
-      else if (provider.browse) items = await provider.browse(id, { config: cfg, skip, timeoutMs: 22000 })
-      else if (provider.browseType) items = await provider.browseType(wantType, { config: cfg, skip, timeoutMs: 22000 })
-      
-      return c.json({ metas: toMetas(items.filter(it => (it.type || wantType) === wantType), providerKey) })
+      if (search && provider.search) {
+        items = await provider.search(search, { config: cfg, skip, timeoutMs: 22000 })
+        items = (items || []).filter((it) => (it.type || wantType) === wantType)
+      } else if (genre && provider.browseGenre) {
+        items = await provider.browseGenre(wantType, genre, { config: cfg, skip, timeoutMs: 22000 })
+      } else if (provider.browse) {
+        items = await provider.browse(id, { config: cfg, skip, timeoutMs: 22000 })
+      } else if (provider.browseType) {
+        items = await provider.browseType(wantType, { config: cfg, skip, timeoutMs: 22000 })
+      }
+      return c.json({ metas: toMetas(items, providerKey) })
     }
     return c.json({ metas: [] })
   } catch (err) {
@@ -267,12 +406,14 @@ const catalogHandler = async (c) => {
 const metaHandler = async (c) => {
   try {
     const cfg = resolveConfig(c)
-    let id = String(c.req.param('id') || '').replace('.json', '')
+    let id = String(c.req.param('id') || '')
+    if (id.endsWith('.json')) id = id.slice(0, -5)
     const parsed = fromStremioProviderId(id)
     if (!parsed) return c.json({ meta: null })
     const provider = getProvider(parsed.providerKey)
-    if (!provider || !provider.getDetail || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) return c.json({ meta: null })
-    
+    if (!provider || !provider.getDetail || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) {
+      return c.json({ meta: null })
+    }
     const detail = await provider.getDetail(parsed.itemId, c.req.param('type'), { config: cfg })
     if (!detail) return c.json({ meta: null })
     const metaId = toStremioProviderId(parsed.providerKey, parsed.itemId)
@@ -288,7 +429,12 @@ const metaHandler = async (c) => {
       imdbRating: detail.imdbRating,
     }
     if (detail.type === 'series' && detail.videos && detail.videos.length) {
-      meta.videos = detail.videos.map((v) => ({ id: metaId + ':' + v.season + ':' + v.episode, title: v.title || ('S' + v.season + 'E' + v.episode), season: v.season, episode: v.episode }))
+      meta.videos = detail.videos.map((v) => ({
+        id: metaId + ':' + v.season + ':' + v.episode,
+        title: v.title || ('S' + v.season + 'E' + v.episode),
+        season: v.season,
+        episode: v.episode,
+      }))
     }
     return c.json({ meta })
   } catch (err) {
@@ -300,31 +446,43 @@ const metaHandler = async (c) => {
 const streamHandler = async (c) => {
   try {
     const cfg = resolveConfig(c)
-    let id = String(c.req.param('id') || '').replace('.json', '')
+    let id = String(c.req.param('id') || '')
+    if (id.endsWith('.json')) id = id.slice(0, -5)
     const parsed = fromStremioProviderId(id)
     if (!parsed) return c.json({ streams: [] })
     const provider = getProvider(parsed.providerKey)
-    if (!provider || !provider.getDetail || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) return c.json({ streams: [] })
-    
+    if (!provider || !provider.getDetail || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) {
+      return c.json({ streams: [] })
+    }
     const detail = await provider.getDetail(parsed.itemId, c.req.param('type'), { config: cfg })
     if (!detail) return c.json({ streams: [] })
-    const streams = await provider.getStreams(detail, { season: parsed.season, episode: parsed.episode })
-    return c.json({ streams: (streams || []).map((s) => ({ name: s.name || s.quality || 'HD', title: s.title, url: s.url })) })
+    const streams = await provider.getStreams(detail, {
+      season: parsed.season,
+      episode: parsed.episode,
+    })
+    return c.json({
+      streams: (streams || []).map((s) => ({
+        name: s.name || s.quality || 'HD',
+        title: s.title,
+        url: s.url,
+      })),
+    })
   } catch (err) {
     log.error('stream', err)
     return c.json({ streams: [] })
   }
 }
 
-app.get('/manifest.json', manifestHandler)
-app.get('/c/:config/manifest.json', manifestHandler)
-app.get('/catalog/:type/:id.json', catalogHandler)
-app.get('/catalog/:type/:id/:extraArgs', catalogHandler)
-app.get('/c/:config/catalog/:type/:id.json', catalogHandler)
-app.get('/c/:config/catalog/:type/:id/:extraArgs', catalogHandler)
-app.get('/meta/:type/:id.json', metaHandler)
-app.get('/c/:config/meta/:type/:id.json', metaHandler)
-app.get('/stream/:type/:id.json', streamHandler)
-app.get('/c/:config/stream/:type/:id.json', streamHandler)
+for (const prefix of ['', '/c/:config']) {
+  app.get(prefix + '/manifest.json', manifestHandler)
+  app.get(prefix + '/catalog/:type/:id/:extraArgs.json', catalogHandler)
+  app.get(prefix + '/catalog/:type/:id/:extraArgs', catalogHandler)
+  app.get(prefix + '/catalog/:type/:id.json', catalogHandler)
+  app.get(prefix + '/catalog/:type/:id', catalogHandler)
+  app.get(prefix + '/meta/:type/:id.json', metaHandler)
+  app.get(prefix + '/meta/:type/:id', metaHandler)
+  app.get(prefix + '/stream/:type/:id.json', streamHandler)
+  app.get(prefix + '/stream/:type/:id', streamHandler)
+}
 
 export default app

@@ -1,4 +1,4 @@
 name = "cinemagraphy-next"
 main = "worker.js"
-compatibility_date = "2024-02-28"
+compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
