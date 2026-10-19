@@ -1,6 +1,6 @@
 /**
  * Node runtime — Core + Stremio adapter + providers.
- * CinemaGraphy-next 0.6.3 — cinematic landing
+ * CinemaGraphy-next 0.6.4 — clean landing
  */
 import cors from 'cors'
 import express from 'express'
@@ -25,7 +25,7 @@ loadEnvFile('.env')
 
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.6.3'
+const VERSION = process.env.ADDON_VERSION || '0.6.4'
 
 const FREE_PROVIDERS = ['f2media', 'cinamatic', 'aslmoviez']
 const ALL_PROVIDER_KEYS = [...FREE_PROVIDERS, 'avamovie', 'digimovie']
