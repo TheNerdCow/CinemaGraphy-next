@@ -1,9 +1,5 @@
 /**
- * CinemaGraphy NEXT — Native Cloudflare Workers Runtime
- * Fixes:
- * 1. Public & Personal /manifest.json generation & Stremio installation
- * 2. Web-standard Base64URL encoding/decoding (no Node Buffer needed)
- * 3. Direct asset serving & complete catalog/meta/stream routing
+ * CinemaGraphy NEXT — Native Cloudflare Workers Runtime (Ultimate Catalog Fix)
  */
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -44,7 +40,6 @@ function deepMergeProviders(a = {}, b = {}) {
   return out
 }
 
-// انکودر و دیکودر ۱۰۰٪ سازگار با Cloudflare Workers (بدون نیاز به Buffer نود)
 function safeEncodeConfig(cfg) {
   try {
     const t = encodeUserConfig(cfg)
@@ -89,11 +84,14 @@ function getBaseServerConfig(c) {
     avamovie: { enabled: false, baseUrl: 'https://avadel.top' },
     digimovie: { enabled: false, baseUrl: 'https://digimoviez53.top' },
   }
-  return {
+  const merged = deepMergeProviders(defaultProviders, base.providers || {})
+  return applyMode({
     ...base,
+    mode: base.mode || 'public',
+    resources: { catalog: true, meta: true, stream: true, ...(base.resources || {}) },
     providersEnabled: base.providersEnabled?.length ? base.providersEnabled : [...FREE_PROVIDERS],
-    providers: deepMergeProviders(defaultProviders, base.providers || {}),
-  }
+    providers: merged,
+  })
 }
 
 function resolveConfig(c) {
@@ -102,20 +100,15 @@ function resolveConfig(c) {
   const overlay = token ? safeDecodeConfig(token) : null
   let cfg = server
   if (overlay) {
-    const enabledList = overlay.providersEnabled?.length
-      ? overlay.providersEnabled
-      : server.providersEnabled
+    const enabledList = overlay.providersEnabled?.length ? overlay.providersEnabled : server.providersEnabled
     const mergedProviders = deepMergeProviders(server.providers, overlay.providers)
     for (const k of ALL_PROVIDER_KEYS) {
-      mergedProviders[k] = {
-        ...(mergedProviders[k] || {}),
-        enabled: enabledList.includes(k),
-      }
+      mergedProviders[k] = { ...(mergedProviders[k] || {}), enabled: enabledList.includes(k) }
     }
     cfg = applyMode({
       ...server,
       ...overlay,
-      resources: { ...(server.resources || {}), ...(overlay.resources || {}) },
+      resources: { catalog: true, meta: true, stream: true, ...(server.resources || {}), ...(overlay.resources || {}) },
       meta: { ...(server.meta || {}), ...(overlay.meta || {}) },
       ui: { ...(server.ui || {}), ...(overlay.ui || {}) },
       providers: mergedProviders,
@@ -184,15 +177,26 @@ function landingHtml(opts = {}, c) {
 
 function toMetas(items, providerKey) {
   return (items || []).map((it) => {
-    const itemId = String(it.internalId || '').replace(new RegExp('^cg:' + providerKey + ':'), '')
+    const rawId = String(it.internalId || it.id || '')
+    const itemId = rawId.replace(new RegExp('^cg:' + providerKey + ':'), '')
     return {
       id: toStremioProviderId(providerKey, itemId),
-      type: it.type,
-      name: it.title,
+      type: it.type || 'movie',
+      name: it.title || it.name || 'بدون عنوان',
       poster: it.poster,
       releaseInfo: it.year ? String(it.year) : undefined,
     }
   })
+}
+
+function detectProviderKeyFromCatalogId(id) {
+  const lower = String(id || '').toLowerCase()
+  for (const k of ALL_PROVIDER_KEYS) {
+    if (lower.startsWith(k + '_') || lower.startsWith(k + '-') || lower.includes(k)) {
+      return k
+    }
+  }
+  return null
 }
 
 let statusCache = { ts: 0, data: null }
@@ -200,12 +204,7 @@ async function checkDomainReachable(url) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 5000)
   try {
-    await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-    })
+    await fetch(url, { method: 'GET', redirect: 'follow', signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0' } })
     clearTimeout(timeout)
     return true
   } catch {
@@ -217,7 +216,6 @@ async function checkDomainReachable(url) {
 const app = new Hono()
 app.use('*', cors())
 
-// فال‌بک برای فایل‌های عکس در کلادفلر
 app.get('/assets/:file', (c) => {
   const f = c.req.param('file')
   if (f === 'Bg.jpg') return c.redirect(ASSET_BG, 302)
@@ -294,7 +292,7 @@ app.post('/session/clear', (c) => {
 })
 
 app.get('/health', (c) => {
-  const cfg = getBaseServerConfig(c)
+  const cfg = resolveConfig(c)
   return c.json({
     ok: true,
     service: 'cinemagraphy-next',
@@ -306,9 +304,10 @@ app.get('/health', (c) => {
 const manifestHandler = (c) => {
   try {
     const cfg = resolveConfig(c)
+    const enabledKeys = cfg.providersEnabled?.length ? cfg.providersEnabled : FREE_PROVIDERS
     let enabled = listEnabledProviders(cfg)
     if (!enabled.length) {
-      enabled = FREE_PROVIDERS.map((k) => getProvider(k)).filter(Boolean)
+      enabled = enabledKeys.map((k) => getProvider(k)).filter(Boolean)
     }
     const providers = enabled.map((p) => ({
       key: p.key,
@@ -316,6 +315,21 @@ const manifestHandler = (c) => {
       capabilities: p.capabilities,
     }))
     const manifest = buildStremioManifest(cfg, providers)
+
+    // اصلاح کامل انواع کاتالوگ‌ها و پاکسازی extraRequired برای نمایش تضمینی در صفحه اصلی استریمیو
+    manifest.types = ['movie', 'series', 'tv', 'anime']
+    if (Array.isArray(manifest.catalogs)) {
+      manifest.catalogs = manifest.catalogs.map((cat) => {
+        const cleanedExtra = [{ name: 'search', isRequired: false }, { name: 'skip', isRequired: false }, { name: 'genre', isRequired: false }]
+        const out = {
+          ...cat,
+          extra: cleanedExtra,
+        }
+        delete out.extraRequired
+        return out
+      })
+    }
+
     manifest.logo = ASSET_MARK
     manifest.icon = ASSET_MARK
     manifest.version = VERSION
@@ -350,53 +364,33 @@ const catalogHandler = async (c) => {
     const genre = genreRaw && !/^all$/i.test(genreRaw) ? genreRaw : ''
     const skip = extra.skip ? Number(extra.skip) : 0
 
-    const typeCatalog = id.match(/^([a-z0-9]+)_(movies|series)$/i)
-    if (typeCatalog) {
-      const providerKey = typeCatalog[1].toLowerCase()
-      const provider = getProvider(providerKey)
-      if (!provider || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) {
-        return c.json({ metas: [] })
-      }
-      const wantType = type === 'series' ? 'series' : 'movie'
-      let items = []
-      if (search && provider.search) {
-        items = await provider.search(search, { config: cfg, skip, timeoutMs: 18000 })
-        items = (items || []).filter((it) => (it.type || wantType) === wantType)
-      } else if (genre && provider.browseGenre) {
-        items = await provider.browseGenre(wantType, genre, { config: cfg, skip, timeoutMs: 18000 })
-      } else if (provider.browseType) {
-        items = await provider.browseType(wantType, { config: cfg, skip, timeoutMs: 18000 })
-      }
-      return c.json({ metas: toMetas(items, providerKey) })
-    }
+    const providerKey = detectProviderKeyFromCatalogId(id)
+    if (!providerKey) return c.json({ metas: [] })
 
-    let providerKey = null
-    for (const k of ALL_PROVIDER_KEYS) {
-      if (id.startsWith(k + '_')) {
-        providerKey = k
-        break
+    const provider = getProvider(providerKey)
+    if (!provider) return c.json({ metas: [] })
+
+    const wantType = type === 'series' ? 'series' : 'movie'
+    let items = []
+
+    if (search && provider.search) {
+      items = await provider.search(search, { config: cfg, skip, timeoutMs: 22000 })
+      items = (items || []).filter((it) => (it.type || wantType) === wantType)
+    } else if (genre && provider.browseGenre) {
+      items = await provider.browseGenre(wantType, genre, { config: cfg, skip, timeoutMs: 22000 })
+    } else if (provider.browse) {
+      items = await provider.browse(id, { config: cfg, skip, timeoutMs: 22000 })
+      if (!items || !items.length) {
+        items = await provider.browse(providerKey + '_movies', { config: cfg, skip, timeoutMs: 22000 })
       }
-    }
-    if (providerKey) {
-      const provider = getProvider(providerKey)
-      if (!provider || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) {
-        return c.json({ metas: [] })
-      }
-      let items = []
-      const wantType = type === 'series' ? 'series' : 'movie'
-      if (search && provider.search) {
-        items = await provider.search(search, { config: cfg, skip, timeoutMs: 22000 })
-        items = (items || []).filter((it) => (it.type || wantType) === wantType)
-      } else if (genre && provider.browseGenre) {
-        items = await provider.browseGenre(wantType, genre, { config: cfg, skip, timeoutMs: 22000 })
-      } else if (provider.browse) {
-        items = await provider.browse(id, { config: cfg, skip, timeoutMs: 22000 })
-      } else if (provider.browseType) {
+      if ((!items || !items.length) && provider.browseType) {
         items = await provider.browseType(wantType, { config: cfg, skip, timeoutMs: 22000 })
       }
-      return c.json({ metas: toMetas(items, providerKey) })
+    } else if (provider.browseType) {
+      items = await provider.browseType(wantType, { config: cfg, skip, timeoutMs: 22000 })
     }
-    return c.json({ metas: [] })
+
+    return c.json({ metas: toMetas(items, providerKey) })
   } catch (err) {
     log.error('catalog', err)
     return c.json({ metas: [] })
@@ -411,7 +405,7 @@ const metaHandler = async (c) => {
     const parsed = fromStremioProviderId(id)
     if (!parsed) return c.json({ meta: null })
     const provider = getProvider(parsed.providerKey)
-    if (!provider || !provider.getDetail || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) {
+    if (!provider || !provider.getDetail) {
       return c.json({ meta: null })
     }
     const detail = await provider.getDetail(parsed.itemId, c.req.param('type'), { config: cfg })
@@ -451,7 +445,7 @@ const streamHandler = async (c) => {
     const parsed = fromStremioProviderId(id)
     if (!parsed) return c.json({ streams: [] })
     const provider = getProvider(parsed.providerKey)
-    if (!provider || !provider.getDetail || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) {
+    if (!provider || !provider.getDetail) {
       return c.json({ streams: [] })
     }
     const detail = await provider.getDetail(parsed.itemId, c.req.param('type'), { config: cfg })
