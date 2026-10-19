@@ -1,6 +1,6 @@
 /**
  * Node runtime — Core + Stremio adapter + providers.
- * CinemaGraphy-next 0.6.6 — Liquid Glass Edition
+ * CinemaGraphy-next 0.6.6 — Liquid Glass Edition with New Domains
  */
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -59,9 +59,7 @@ function resolveConfig(req) {
       meta: { ...server.meta, ...(overlay.meta || {}) },
       ui: { ...server.ui, ...(overlay.ui || {}) },
       providers: deepMergeProviders(server.providers, overlay.providers),
-      providersEnabled: overlay.providersEnabled?.length
-        ? overlay.providersEnabled
-        : server.providersEnabled,
+      providersEnabled: overlay.providersEnabled?.length ? overlay.providersEnabled : server.providersEnabled,
     })
   }
   if (!cfg.providers?.avamovie?.cookie) {
@@ -83,6 +81,7 @@ function buildPersonalConfig({ providersEnabled, avaCookie, digiCookie, avaBaseU
   const digi = String(digiCookie || '').trim()
   const avaBase = String(avaBaseUrl || '').trim()
   const digiBase = String(digiBaseUrl || '').trim()
+  
   if (unique.includes('avamovie')) {
     if (!ava) unique.splice(unique.indexOf('avamovie'), 1)
     else {
@@ -142,17 +141,14 @@ async function checkDomainReachable(url) {
   const timeout = setTimeout(() => controller.abort(), 6000)
   try {
     const res = await fetch(url, {
-      method: 'HEAD',
+      method: 'GET',
       redirect: 'follow',
       signal: controller.signal,
-      headers: { 
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      },
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
     })
     clearTimeout(timeout)
-    // اگر هر پاسخی داد (حتی 403 یا 503 کلادفلر)، یعنی سرور سایت بالاست
-    return true
-  } catch {
+    return true // اگر سایت وصل شد و کلادفلر چلنج هم داد، یعنی سرور بالاست
+  } catch (err) {
     clearTimeout(timeout)
     return false
   }
@@ -178,12 +174,14 @@ function createApp() {
       return res.json(statusCache.data)
     }
     const cfg = configFromEnv(process.env)
+    
+    // استفاده از دامنه‌های جدید بدون فیلتر
     const domains = {
-      f2media: cfg.providers?.f2media?.baseUrl || 'https://f2m.site',
-      cinamatic: cfg.providers?.cinamatic?.baseUrl || 'https://cinamatic.ir',
+      f2media: cfg.providers?.f2media?.baseUrl || 'https://www.myf2ms.top',
+      cinamatic: cfg.providers?.cinamatic?.baseUrl || 'https://cinamatic.top',
       aslmoviez: cfg.providers?.aslmoviez?.baseUrl || 'https://aslmoviez.com',
-      avamovie: cfg.providers?.avamovie?.baseUrl || 'https://avamovie.shop',
-      digimovie: cfg.providers?.digimovie?.baseUrl || 'https://digimoviez.com',
+      avamovie: cfg.providers?.avamovie?.baseUrl || 'https://avadel.top',
+      digimovie: cfg.providers?.digimovie?.baseUrl || 'https://digimoviez53.top',
     }
     const entries = await Promise.all(
       Object.entries(domains).map(async ([k, u]) => [k, await checkDomainReachable(u)])
@@ -199,10 +197,13 @@ function createApp() {
     if (!providers) providers = []
     if (!Array.isArray(providers)) providers = [providers]
     providers = providers.map(String).filter((k) => ALL_PROVIDER_KEYS.includes(k))
+    
     const cookie = String(body.avaCookie || '').trim()
     const digiCookie = String(body.digiCookie || '').trim()
-    const avaBase = String(body.avaBaseUrl || '').trim()
-    const digiBase = String(body.digiBaseUrl || '').trim()
+    
+    // آدرس‌های پیش‌فرض جدید
+    const avaBase = String(body.avaBaseUrl || 'https://avadel.top').trim()
+    const digiBase = String(body.digiBaseUrl || 'https://digimoviez53.top').trim()
 
     if (!providers.length) providers = [...FREE_PROVIDERS]
     if (providers.includes('avamovie') && !cookie) {
