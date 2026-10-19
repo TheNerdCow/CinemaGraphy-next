@@ -1,53 +1,53 @@
-# CinemaGraphy-next
+<div align="center">
+  <img src="src/runtimes/node/assets/favandinstall%20icon.jpg" width="100" height="100" style="border-radius: 50%; border: 2px solid #e8a317;" alt="CinemaGraphy NEXT Logo">
+  <h1>سینماگرافی NEXT (CinemaGraphy NEXT)</h1>
+  <p><strong>افزونه پیشرفته استریمیو و نوویو برای دسترسی به فیلم، سریال و انیمه از منابع ایرانی</strong></p>
 
-**Independent modular rewrite** of [CinemaGraphy](https://github.com/TheNerdCow/CinemaGraphy).
+  <p>
+    <a href="https://github.com/TheNerdCow/CinemaGraphy-next/releases"><img src="https://img.shields.io/badge/version-0.6.6-orange.svg" alt="Version"></a>
+    <img src="https://img.shields.io/badge/Stremio-Compatible-purple.svg" alt="Stremio">
+    <img src="https://img.shields.io/badge/Nuvio-Supported-blue.svg" alt="Nuvio">
+    <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
+  </p>
+</div>
 
-Clean-room · new git history · **does not** replace production (`cmplugin.ir`).
+---
 
-## Status: `0.2.7` (stabilization)
+## 🌟 درباره پروژه
+**CinemaGraphy NEXT** یک افزونه (Addon) مدرن، سریع و چندمنبعی برای پلتفرم‌های پخش فیلم و سریال **Stremio** و **Nuvio** است که به طور ویژه برای دسترسی به آرشیوها و منابع محتوایی ایران طراحی شده است. 
 
-| Area | State |
-|------|--------|
-| Core config (`full` / `streams` / `catalogs`) | Done |
-| SSRF-safe HTTP client | Done |
-| Internal IDs + Stremio id mapping | Done |
-| Stremio manifest + catalog/meta/stream routes | Done |
-| F2Media search / browse catalogs / streams | Done |
-| Metadata | **Cinemeta + MetaHub** (no API key) |
-| Unit / provider fixture tests | `npm test` |
-| Nuvio dedicated adapter | Not yet (Stremio protocol works in Nuvio clients) |
-| Cloudflare Workers runtime | Not yet |
+این پروژه با تمرکز بر سرعت بالا، رابط کاربری تمیز و بدون نیاز به کلیدهای پیچیده متا (`Cinemeta`) توسعه یافته است.
 
-## Metadata
+---
 
-- Primary: public [Cinemeta](https://v3-cinemeta.strem.io) (no key).
-- Posters / backgrounds: `images.metahub.space` when an IMDb id is known.
-- Stream playback does **not** depend on metadata success.
+## ✨ ویژگی‌های کلیدی
+* **پشتیبانی از چند منبع معتبر ایرانی:** شامل منابع رایگان (`F2Media`, `Cinamatic`, `AslMoviez`) و منابع اشتراکی (`AvaMovie`, `DigiMovie`).
+* **بدون نیاز به کلید متا اجباری:** اتصال هوشمند و مستقل برای دریافت اطلاعات فیلم و سریال.
+* **صفحه پیکربندی (Landing Page) مدرن:** طراحی شده به صورت تک‌صفحه‌ای، کاملاً ریسپانسیو و راست‌چین (RTL) با تم سینمایی تاریک و طلایی.
+* **ساخت مانیفست شخصی:** امکان انتخاب دستی منابع دلخواه و ساخت لینک شخصی یکتا برای Stremio و Nuvio.
+* **بررسی زنده وضعیت منابع:** قابلیت تست و نمایش آنلاین یا آفلاین بودن دامنه‌های منابع به صورت خودکار.
 
-## Local run
+---
 
-```bash
-git clone https://github.com/TheNerdCow/CinemaGraphy-next.git
-cd CinemaGraphy-next
-npm install
-cp .env.example .env
-npm test
-npm start
-# http://127.0.0.1:7000/manifest.json
-# http://127.0.0.1:7000/health
-```
+## 🚀 نصب و راه‌اندازی سریع
 
-Streams-only mode:
+### ۱. نصب عمومی (پیش‌فرض)
+می‌توانید مانیفست عمومی افزونه را مستقیماً با لینک زیر روی Stremio یا Nuvio خود نصب کنید:
+> `https://your-domain.com/manifest.json`
 
-```bash
-ADDON_MODE=streams npm start
-```
+### ۲. نصب شخصی‌سازی‌شده (مختص خودتان)
+1. وارد صفحه اصلی افزونه شوید.
+2. از بخش **نصب و پیکربندی**، منابع رایگان یا اشتراکی دلخواه خود را تیک بزنید.
+3. در صورت انتخاب منابع اشتراکی (مثل AvaMovie یا DigiMovie)، کوکی نشست (Cookie) خود را وارد کنید.
+4. روی دکمه **ساخت مانیفست شخصی** کلیک کنید و لینک اختصاصی خود را با یک کلیک در Stremio یا Nuvio نصب کنید.
 
-## Production (unchanged)
+---
 
-- https://cmplugin.ir  
-- https://github.com/TheNerdCow/CinemaGraphy  
+## 🛠 راه‌اندازی روی سرور شخصی (Self-Hosting)
 
-## License
+اگر می‌خواهید این افزونه را روی هاست شخصی یا سرور خود (مثل Railway، Render، یا VPS) اجرا کنید:
 
-ISC
+1. مخزن را کلون کنید:
+   ```bash
+   git clone [https://github.com/TheNerdCow/CinemaGraphy-next.git](https://github.com/TheNerdCow/CinemaGraphy-next.git)
+   cd CinemaGraphy-next
