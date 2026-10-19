@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="src/runtimes/node/assets/favandinstall%20icon.png" width="100" height="100" style="border-radius: 50%; border: 2px solid #e8a317;" alt="CinemaGraphy NEXT Logo">
+  <img src="src/runtimes/node/assets/favandinstall.png" width="100" height="100" style="border-radius: 50%; border: 2px solid #e8a317;" alt="CinemaGraphy NEXT Logo">
   <h1>سینماگرافی NEXT (CinemaGraphy NEXT)</h1>
   <p><strong>افزونه پیشرفته استریمیو و نوویو برای دسترسی به فیلم، سریال و انیمه از منابع ایرانی</strong></p>
 
