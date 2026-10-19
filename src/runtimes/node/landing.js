@@ -1,7 +1,7 @@
 /**
  * CinemaGraphy NEXT — Liquid Glass Modern RTL Landing Page
  */
-import { ASSET_BG, ASSET_LOGO, ASSET_MARK, ASSET_FAV } from './landing-assets.js'
+import { ASSET_BG, ASSET_MARK, ASSET_FAV, ASSET_DIGI_FAV } from './landing-assets.js'
 
 function esc(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -44,7 +44,7 @@ export function renderLanding(opts = {}) {
     cinamatic: 'https://cinamatic.top/wp-content/uploads/2026/06/cropped-46C79B8B-60E5-4483-8245-C8676952D972-32x32.png',
     aslmoviez: 'https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://aslmoviez.com&size=64',
     avamovie: 'https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://avadel.top&size=64',
-    digimovie: 'https://digimoviez.com/wp-content/uploads/2023/09/cropped-digi-fav-32x32.png'
+    digimovie: ASSET_DIGI_FAV
   }
 
   const flashHtml = flash ? `<div class="flash ${flash.ok ? 'ok' : 'err'}" role="status"><span>${esc(flash.msg)}</span></div>` : ''
@@ -99,9 +99,9 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
 /* هیرو */
 .hero-section { text-align: center; border-color: rgba(245, 158, 11, 0.25); border-top-color: rgba(245, 158, 11, 0.4); box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), inset 0 1px 20px rgba(245, 158, 11, 0.05); }
 
-/* رفع بیرون‌زدگی لوگو */
+/* رفع بیرون‌زدگی لوگو با Transparent PNG */
 .logo-badge-wrap { width: 96px; height: 96px; margin: 0 auto 16px; border-radius: 50%; background: #090d18; border: 2px solid rgba(245, 158, 11, 0.4); box-shadow: 0 0 30px var(--gold-glow); padding: 4px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.logo-badge-wrap img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; transform: scale(0.9); }
+.logo-badge-wrap img { width: 100%; height: 100%; object-fit: contain; transform: scale(1.05); }
 
 .version-tag { display: inline-block; font-size: 0.75rem; font-weight: 700; color: var(--gold); background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.3); padding: 3px 14px; border-radius: 999px; margin-bottom: 12px; direction: ltr; }
 .hero-section h1 { font-size: clamp(1.8rem, 4.5vw, 2.5rem); font-weight: 900; margin-bottom: 4px; letter-spacing: -0.02em; }
@@ -225,7 +225,7 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
     </div>
   </section>
 
-  <!-- نصب و پیکربندی (با کاتالوگ‌ها) -->
+  <!-- نصب و پیکربندی (با کاتالوگ‌های جامع) -->
   <section class="liquid-glass" id="install">
     <div class="section-header"><div class="section-title">نصب و پیکربندی مانیفست</div></div>
     ${flashHtml}${installResult}
@@ -247,6 +247,9 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
             <label class="cat-chip"><input type="checkbox" name="f2media_cat" value="movies"${catSel('f2media','movies')}/> فیلم‌ها</label>
             <label class="cat-chip"><input type="checkbox" name="f2media_cat" value="series"${catSel('f2media','series')}/> سریال‌ها</label>
             <label class="cat-chip"><input type="checkbox" name="f2media_cat" value="dubbed"${catSel('f2media','dubbed')}/> دوبله فارسی</label>
+            <label class="cat-chip"><input type="checkbox" name="f2media_cat" value="anime"${catSel('f2media','anime')}/> انیمه</label>
+            <label class="cat-chip"><input type="checkbox" name="f2media_cat" value="animation"${catSel('f2media','animation')}/> انیمیشن</label>
+            <label class="cat-chip"><input type="checkbox" name="f2media_cat" value="hindi"${catSel('f2media','hindi')}/> هندی</label>
           </div>
         </div>
 
@@ -256,6 +259,8 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
           <div class="catalog-list">
             <label class="cat-chip"><input type="checkbox" name="cinamatic_cat" value="movies"${catSel('cinamatic','movies')}/> فیلم‌ها</label>
             <label class="cat-chip"><input type="checkbox" name="cinamatic_cat" value="series"${catSel('cinamatic','series')}/> سریال‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="cinamatic_cat" value="dubbed"${catSel('cinamatic','dubbed')}/> دوبله فارسی</label>
+            <label class="cat-chip"><input type="checkbox" name="cinamatic_cat" value="anime"${catSel('cinamatic','anime')}/> انیمه</label>
           </div>
         </div>
 
@@ -265,6 +270,8 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
           <div class="catalog-list">
             <label class="cat-chip"><input type="checkbox" name="aslmoviez_cat" value="movies"${catSel('aslmoviez','movies')}/> فیلم‌ها</label>
             <label class="cat-chip"><input type="checkbox" name="aslmoviez_cat" value="series"${catSel('aslmoviez','series')}/> سریال‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="aslmoviez_cat" value="dubbed"${catSel('aslmoviez','dubbed')}/> دوبله</label>
+            <label class="cat-chip"><input type="checkbox" name="aslmoviez_cat" value="anime"${catSel('aslmoviez','anime')}/> انیمه</label>
           </div>
         </div>
 
@@ -274,6 +281,10 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
           <div class="catalog-list">
             <label class="cat-chip"><input type="checkbox" name="avamovie_cat" value="movies"${catSel('avamovie','movies')}/> فیلم‌ها</label>
             <label class="cat-chip"><input type="checkbox" name="avamovie_cat" value="series"${catSel('avamovie','series')}/> سریال‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="avamovie_cat" value="dubbed"${catSel('avamovie','dubbed')}/> دوبله</label>
+            <label class="cat-chip"><input type="checkbox" name="avamovie_cat" value="anime"${catSel('avamovie','anime')}/> انیمه</label>
+            <label class="cat-chip"><input type="checkbox" name="avamovie_cat" value="korean"${catSel('avamovie','korean')}/> کره‌ای</label>
+            <label class="cat-chip"><input type="checkbox" name="avamovie_cat" value="hindi"${catSel('avamovie','hindi')}/> هندی</label>
           </div>
           <div class="form-inputs-grid">
             <div class="form-group"><label>کوکی حساب (Cookie)</label><input type="password" name="avaCookie" class="ltr-input" value="${esc(cookieValue)}" placeholder="your cookie here"/></div>
@@ -287,6 +298,8 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
           <div class="catalog-list">
             <label class="cat-chip"><input type="checkbox" name="digimovie_cat" value="movies"${catSel('digimovie','movies')}/> فیلم‌ها</label>
             <label class="cat-chip"><input type="checkbox" name="digimovie_cat" value="series"${catSel('digimovie','series')}/> سریال‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="digimovie_cat" value="dubbed"${catSel('digimovie','dubbed')}/> دوبله</label>
+            <label class="cat-chip"><input type="checkbox" name="digimovie_cat" value="anime"${catSel('digimovie','anime')}/> انیمه</label>
           </div>
           <div class="form-inputs-grid">
             <div class="form-group"><label>کوکی حساب (Cookie)</label><input type="password" name="digiCookie" class="ltr-input" value="${esc(digiCookieValue)}" placeholder="your cookie here"/></div>

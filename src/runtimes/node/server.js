@@ -1,6 +1,6 @@
 /**
  * Node runtime — Core + Stremio adapter + providers.
- * CinemaGraphy-next 0.6.6 — Liquid Glass Edition with Dynamic Catalogs
+ * CinemaGraphy-next 0.6.6 — Liquid Glass + Advanced Catalog Filtering
  */
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -60,7 +60,7 @@ function resolveConfig(req) {
       ui: { ...server.ui, ...(overlay.ui || {}) },
       providers: deepMergeProviders(server.providers, overlay.providers),
       providersEnabled: overlay.providersEnabled?.length ? overlay.providersEnabled : server.providersEnabled,
-      catalogs: overlay.catalogs || {} // اضافه شدن کاتالوگ‌ها
+      catalogs: overlay.catalogs || {} 
     })
   }
   if (!cfg.providers?.avamovie?.cookie) {
@@ -152,7 +152,7 @@ async function checkDomainReachable(url) {
       },
     })
     clearTimeout(timeout)
-    return true // اگر سایت وصل شد (حتی با ارور 403 کلادفلر)، یعنی سرور بالاست
+    return true
   } catch (err) {
     clearTimeout(timeout)
     return false
@@ -201,7 +201,7 @@ function createApp() {
     if (!Array.isArray(providers)) providers = [providers]
     providers = providers.map(String).filter((k) => ALL_PROVIDER_KEYS.includes(k))
     
-    // خواندن کاتالوگ‌های انتخاب شده
+    // خواندن کاتالوگ‌های پیشرفته
     const catalogs = {
       f2media: [].concat(body.f2media_cat || []),
       cinamatic: [].concat(body.cinamatic_cat || []),
@@ -271,7 +271,7 @@ function createApp() {
       
       const manifest = buildStremioManifest(cfg, providers)
       
-      // اتصال منطق کاتالوگ‌های لندینگ به مانیفست استریمیو
+      // اتصال دقیق و تفکیک‌شده کاتالوگ‌ها (دوبله، انیمه، هندی و...)
       if (cfg.catalogs && manifest.catalogs) {
         manifest.catalogs = manifest.catalogs.filter(cat => {
           let provKey = null
@@ -281,17 +281,29 @@ function createApp() {
           if (provKey && cfg.catalogs[provKey]) {
             const allowed = cfg.catalogs[provKey]
             const cid = cat.id.toLowerCase()
-            const isDubbed = cid.includes('dubbed') || (cat.name && cat.name.includes('دوبله'))
+            const cname = (cat.name || '').toLowerCase()
             
-            if (isDubbed && !allowed.includes('dubbed')) return false
-            if (cid.includes('series') && !allowed.includes('series')) return false
-            if (cid.includes('movie') && !isDubbed && !allowed.includes('movies')) return false
+            const isDubbed = cid.includes('dubbed') || cname.includes('دوبله')
+            const isAnime = cid.includes('anime') || cname.includes('انیمه')
+            const isAnimation = cid.includes('animation') || cname.includes('انیمیشن')
+            const isHindi = cid.includes('hindi') || cid.includes('indian') || cid.includes('bollywood') || cname.includes('هندی')
+            const isKorean = cid.includes('korean') || cid.includes('kdrama') || cname.includes('کره')
+            const isSeries = cid.includes('series') || cname.includes('سریال')
+            const isMovie = cid.includes('movie') || cname.includes('فیلم')
+
+            if (isDubbed) return allowed.includes('dubbed')
+            if (isAnime) return allowed.includes('anime')
+            if (isAnimation) return allowed.includes('animation')
+            if (isHindi) return allowed.includes('hindi')
+            if (isKorean) return allowed.includes('korean')
+            if (isSeries) return allowed.includes('series')
+            if (isMovie) return allowed.includes('movies')
           }
           return true
         })
       }
       
-      // آپدیت لوگوی افزونه به فایل جدید
+      // جایگزینی لوگوی شفاف برای استریمیو
       manifest.logo = manifest.logo.replace('MainLogo.jpg', 'favandinstall.png')
       manifest.icon = manifest.icon ? manifest.icon.replace('MainLogo.jpg', 'favandinstall.png') : manifest.logo
       
