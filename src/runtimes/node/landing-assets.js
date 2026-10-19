@@ -1,4 +1,5 @@
-export { ASSET_BG } from './assets/bg.js'
-export { ASSET_LOGO } from './assets/logo.js'
-export { ASSET_MARK } from './assets/mark.js'
-export { ASSET_FAV } from './assets/fav.js'
+/** CinemaGraphy NEXT landing brand assets (optimized) */
+export const ASSET_BG = 'data:image/jpeg;base64,PLACEHOLDER_WILL_LOAD'
+export const ASSET_LOGO = 'data:image/webp;base64,PLACEHOLDER'
+export const ASSET_MARK = 'data:image/png;base64,PLACEHOLDER'
+export const ASSET_FAV = 'data:image/png;base64,PLACEHOLDER'
