@@ -1,6 +1,6 @@
 /**
  * Node runtime — Core + Stremio adapter + providers.
- * CinemaGraphy-next 0.6.6 — cmplugin-style compact landing + JPG assets
+ * CinemaGraphy-next 0.6.6 — Liquid Glass Edition
  */
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -134,20 +134,24 @@ function toMetas(items, providerKey) {
   })
 }
 
+// وضعیت آنلاین با دور زدن Cloudflare
 let statusCache = { ts: 0, data: null }
 
 async function checkDomainReachable(url) {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 5000)
+  const timeout = setTimeout(() => controller.abort(), 6000)
   try {
     const res = await fetch(url, {
-      method: 'GET',
+      method: 'HEAD',
       redirect: 'follow',
       signal: controller.signal,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      headers: { 
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
     })
     clearTimeout(timeout)
-    return res.status > 0 && res.status < 500
+    // اگر هر پاسخی داد (حتی 403 یا 503 کلادفلر)، یعنی سرور سایت بالاست
+    return true
   } catch {
     clearTimeout(timeout)
     return false
