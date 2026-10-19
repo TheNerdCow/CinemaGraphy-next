@@ -1,6 +1,6 @@
 /**
  * Node runtime — Core + Stremio adapter + providers.
- * CinemaGraphy-next 0.6.6 — Liquid Glass Edition with New Domains
+ * CinemaGraphy-next 0.6.6 — Liquid Glass Edition with Dynamic Catalogs
  */
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -60,6 +60,7 @@ function resolveConfig(req) {
       ui: { ...server.ui, ...(overlay.ui || {}) },
       providers: deepMergeProviders(server.providers, overlay.providers),
       providersEnabled: overlay.providersEnabled?.length ? overlay.providersEnabled : server.providersEnabled,
+      catalogs: overlay.catalogs || {} // اضافه شدن کاتالوگ‌ها
     })
   }
   if (!cfg.providers?.avamovie?.cookie) {
@@ -73,7 +74,7 @@ function resolveConfig(req) {
   return cfg
 }
 
-function buildPersonalConfig({ providersEnabled, avaCookie, digiCookie, avaBaseUrl, digiBaseUrl }) {
+function buildPersonalConfig({ providersEnabled, catalogs, avaCookie, digiCookie, avaBaseUrl, digiBaseUrl }) {
   const enabled = (providersEnabled || []).filter((k) => ALL_PROVIDER_KEYS.includes(k))
   const unique = [...new Set(enabled.length ? enabled : FREE_PROVIDERS)]
   const providers = {}
@@ -96,7 +97,7 @@ function buildPersonalConfig({ providersEnabled, avaCookie, digiCookie, avaBaseU
       if (digiBase.startsWith('http')) providers.digimovie.baseUrl = digiBase.replace(/\/+$/, '').slice(0, 200)
     }
   }
-  return { providersEnabled: unique, providers: Object.keys(providers).length ? providers : undefined }
+  return { providersEnabled: unique, providers: Object.keys(providers).length ? providers : undefined, catalogs }
 }
 
 function landingHtml(opts = {}, req = null) {
@@ -110,6 +111,7 @@ function landingHtml(opts = {}, req = null) {
     version: VERSION,
     freeProviders: FREE_PROVIDERS,
     selected: opts.selected || FREE_PROVIDERS,
+    catalogs: opts.catalogs || {},
     flash: opts.flash || null,
     personalPath: opts.personalPath || '',
     cookieValue: opts.cookieValue || '',
@@ -133,7 +135,7 @@ function toMetas(items, providerKey) {
   })
 }
 
-// وضعیت آنلاین با دور زدن Cloudflare
+// وضعیت آنلاین با دور زدن کامل Cloudflare
 let statusCache = { ts: 0, data: null }
 
 async function checkDomainReachable(url) {
@@ -144,10 +146,13 @@ async function checkDomainReachable(url) {
       method: 'GET',
       redirect: 'follow',
       signal: controller.signal,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+      headers: { 
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+      },
     })
     clearTimeout(timeout)
-    return true // اگر سایت وصل شد و کلادفلر چلنج هم داد، یعنی سرور بالاست
+    return true // اگر سایت وصل شد (حتی با ارور 403 کلادفلر)، یعنی سرور بالاست
   } catch (err) {
     clearTimeout(timeout)
     return false
@@ -174,8 +179,6 @@ function createApp() {
       return res.json(statusCache.data)
     }
     const cfg = configFromEnv(process.env)
-    
-    // استفاده از دامنه‌های جدید بدون فیلتر
     const domains = {
       f2media: cfg.providers?.f2media?.baseUrl || 'https://www.myf2ms.top',
       cinamatic: cfg.providers?.cinamatic?.baseUrl || 'https://cinamatic.top',
@@ -198,24 +201,31 @@ function createApp() {
     if (!Array.isArray(providers)) providers = [providers]
     providers = providers.map(String).filter((k) => ALL_PROVIDER_KEYS.includes(k))
     
+    // خواندن کاتالوگ‌های انتخاب شده
+    const catalogs = {
+      f2media: [].concat(body.f2media_cat || []),
+      cinamatic: [].concat(body.cinamatic_cat || []),
+      aslmoviez: [].concat(body.aslmoviez_cat || []),
+      avamovie: [].concat(body.avamovie_cat || []),
+      digimovie: [].concat(body.digimovie_cat || []),
+    }
+
     const cookie = String(body.avaCookie || '').trim()
     const digiCookie = String(body.digiCookie || '').trim()
-    
-    // آدرس‌های پیش‌فرض جدید
     const avaBase = String(body.avaBaseUrl || 'https://avadel.top').trim()
     const digiBase = String(body.digiBaseUrl || 'https://digimoviez53.top').trim()
 
     if (!providers.length) providers = [...FREE_PROVIDERS]
     if (providers.includes('avamovie') && !cookie) {
-      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'آوا تیک خورده ولی کوکی خالی است' }, selected: providers, digiCookieValue: digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
+      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'آوا تیک خورده ولی کوکی خالی است' }, selected: providers, catalogs, digiCookieValue: digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
     }
     if (providers.includes('digimovie') && !digiCookie) {
-      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'دیجی تیک خورده ولی کوکی خالی است' }, selected: providers, cookieValue: cookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
+      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'دیجی تیک خورده ولی کوکی خالی است' }, selected: providers, catalogs, cookieValue: cookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
     }
 
-    const cfg = buildPersonalConfig({ providersEnabled: providers, avaCookie: cookie, digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase })
+    const cfg = buildPersonalConfig({ providersEnabled: providers, catalogs, avaCookie: cookie, digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase })
     const token = encodeUserConfig(cfg)
-    if (!token) return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'ساخت کانفیگ ناموفق بود' }, selected: providers }, req))
+    if (!token) return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'ساخت کانفیگ ناموفق بود' }, selected: providers, catalogs }, req))
 
     if (cookie) setSessionCookie('avamovie', cookie)
     if (digiCookie) setSessionCookie('digimovie', digiCookie)
@@ -227,6 +237,7 @@ function createApp() {
       flash: { ok: true, msg: 'مانیفست شخصی آماده است — نصب کن یا لینک را کپی کن' },
       personalPath,
       selected: cfg.providersEnabled,
+      catalogs: cfg.catalogs,
       cookieValue: cookie,
       digiCookieValue: digiCookie,
       avaBaseUrl: avaBase,
@@ -257,7 +268,34 @@ function createApp() {
         name: p.name,
         capabilities: p.capabilities,
       }))
-      res.json(buildStremioManifest(cfg, providers))
+      
+      const manifest = buildStremioManifest(cfg, providers)
+      
+      // اتصال منطق کاتالوگ‌های لندینگ به مانیفست استریمیو
+      if (cfg.catalogs && manifest.catalogs) {
+        manifest.catalogs = manifest.catalogs.filter(cat => {
+          let provKey = null
+          for (const k of ALL_PROVIDER_KEYS) {
+            if (cat.id.toLowerCase().includes(k)) provKey = k
+          }
+          if (provKey && cfg.catalogs[provKey]) {
+            const allowed = cfg.catalogs[provKey]
+            const cid = cat.id.toLowerCase()
+            const isDubbed = cid.includes('dubbed') || (cat.name && cat.name.includes('دوبله'))
+            
+            if (isDubbed && !allowed.includes('dubbed')) return false
+            if (cid.includes('series') && !allowed.includes('series')) return false
+            if (cid.includes('movie') && !isDubbed && !allowed.includes('movies')) return false
+          }
+          return true
+        })
+      }
+      
+      // آپدیت لوگوی افزونه به فایل جدید
+      manifest.logo = manifest.logo.replace('MainLogo.jpg', 'favandinstall.png')
+      manifest.icon = manifest.icon ? manifest.icon.replace('MainLogo.jpg', 'favandinstall.png') : manifest.logo
+      
+      res.json(manifest)
     } catch (err) {
       log.error('manifest', err)
       res.status(500).json({ error: String(err.message || err) })

@@ -20,10 +20,17 @@ export function renderLanding(opts = {}) {
   const selected = opts.selected || free
   const isSel = (k) => selected.includes(k)
   const selAttr = (k) => (isSel(k) ? ' checked' : '')
+  
+  // بررسی وضعیت انتخاب کاتالوگ‌ها
+  const catalogs = opts.catalogs || {}
+  const catSel = (prov, cat) => {
+    if (Object.keys(catalogs).length === 0) return ' checked' // دفعه اول همه روشن
+    return (catalogs[prov] && catalogs[prov].includes(cat)) ? ' checked' : ''
+  }
+
   const flash = opts.flash
   const personalPath = opts.personalPath || ''
   
-  // متغیرهای فرم
   const cookieValue = opts.cookieValue || ''
   const digiCookieValue = opts.digiCookieValue || ''
   const avaBaseUrl = opts.avaBaseUrl || 'https://avadel.top'
@@ -32,13 +39,12 @@ export function renderLanding(opts = {}) {
   const hostManifest = opts.hostManifest || '/manifest.json'
   const stremioPublicUrl = 'stremio://' + stripProto(hostManifest)
 
-  // آیکون‌های اختصاصی منابع
   const FAVICONS = {
     f2media: 'https://www.myf2ms.top/favicon.ico',
     cinamatic: 'https://cinamatic.top/wp-content/uploads/2026/06/cropped-46C79B8B-60E5-4483-8245-C8676952D972-32x32.png',
     aslmoviez: 'https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://aslmoviez.com&size=64',
     avamovie: 'https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://avadel.top&size=64',
-    digimovie: 'https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://digimoviez53.top&size=64'
+    digimovie: 'https://digimoviez.com/wp-content/uploads/2023/09/cropped-digi-fav-32x32.png'
   }
 
   const flashHtml = flash ? `<div class="flash ${flash.ok ? 'ok' : 'err'}" role="status"><span>${esc(flash.msg)}</span></div>` : ''
@@ -93,9 +99,9 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
 /* هیرو */
 .hero-section { text-align: center; border-color: rgba(245, 158, 11, 0.25); border-top-color: rgba(245, 158, 11, 0.4); box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), inset 0 1px 20px rgba(245, 158, 11, 0.05); }
 
-/* رفع مشکل بیرون‌زدگی لوگو با scale */
+/* رفع بیرون‌زدگی لوگو */
 .logo-badge-wrap { width: 96px; height: 96px; margin: 0 auto 16px; border-radius: 50%; background: #090d18; border: 2px solid rgba(245, 158, 11, 0.4); box-shadow: 0 0 30px var(--gold-glow); padding: 4px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.logo-badge-wrap img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; transform: scale(0.88); }
+.logo-badge-wrap img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; transform: scale(0.9); }
 
 .version-tag { display: inline-block; font-size: 0.75rem; font-weight: 700; color: var(--gold); background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.3); padding: 3px 14px; border-radius: 999px; margin-bottom: 12px; direction: ltr; }
 .hero-section h1 { font-size: clamp(1.8rem, 4.5vw, 2.5rem); font-weight: 900; margin-bottom: 4px; letter-spacing: -0.02em; }
@@ -150,7 +156,7 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
 
 /* استایل چک‌باکس کاتالوگ‌ها */
 .catalog-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-.cat-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; cursor: pointer; transition: 0.2s; }
+.cat-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); font-size: 0.75rem; font-weight: 600; cursor: pointer; transition: 0.2s; }
 .cat-chip input { display: none; }
 .cat-chip:has(input:checked) { background: rgba(245, 158, 11, 0.15); border-color: var(--gold); color: #fde68a; }
 
@@ -238,9 +244,9 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
         <div class="config-drawer ${isSel('f2media') ? 'open' : ''}" id="drawer-f2media">
           <div class="drawer-header"><img class="src-favicon" src="${FAVICONS.f2media}"/><span>کاتالوگ‌های F2Media</span></div>
           <div class="catalog-list">
-            <label class="cat-chip"><input type="checkbox" name="f2m_cat" value="movies" checked/> فیلم‌ها</label>
-            <label class="cat-chip"><input type="checkbox" name="f2m_cat" value="series" checked/> سریال‌ها</label>
-            <label class="cat-chip"><input type="checkbox" name="f2m_cat" value="dubbed" checked/> دوبله فارسی</label>
+            <label class="cat-chip"><input type="checkbox" name="f2media_cat" value="movies"${catSel('f2media','movies')}/> فیلم‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="f2media_cat" value="series"${catSel('f2media','series')}/> سریال‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="f2media_cat" value="dubbed"${catSel('f2media','dubbed')}/> دوبله فارسی</label>
           </div>
         </div>
 
@@ -248,8 +254,8 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
         <div class="config-drawer ${isSel('cinamatic') ? 'open' : ''}" id="drawer-cinamatic">
           <div class="drawer-header"><img class="src-favicon" src="${FAVICONS.cinamatic}"/><span>کاتالوگ‌های Cinamatic</span></div>
           <div class="catalog-list">
-            <label class="cat-chip"><input type="checkbox" name="cina_cat" value="movies" checked/> فیلم‌ها</label>
-            <label class="cat-chip"><input type="checkbox" name="cina_cat" value="series" checked/> سریال‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="cinamatic_cat" value="movies"${catSel('cinamatic','movies')}/> فیلم‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="cinamatic_cat" value="series"${catSel('cinamatic','series')}/> سریال‌ها</label>
           </div>
         </div>
 
@@ -257,8 +263,8 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
         <div class="config-drawer ${isSel('aslmoviez') ? 'open' : ''}" id="drawer-aslmoviez">
           <div class="drawer-header"><img class="src-favicon" src="${FAVICONS.aslmoviez}"/><span>کاتالوگ‌های AslMoviez</span></div>
           <div class="catalog-list">
-            <label class="cat-chip"><input type="checkbox" name="asl_cat" value="movies" checked/> فیلم‌ها</label>
-            <label class="cat-chip"><input type="checkbox" name="asl_cat" value="series" checked/> سریال‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="aslmoviez_cat" value="movies"${catSel('aslmoviez','movies')}/> فیلم‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="aslmoviez_cat" value="series"${catSel('aslmoviez','series')}/> سریال‌ها</label>
           </div>
         </div>
 
@@ -266,8 +272,8 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
         <div class="config-drawer ${isSel('avamovie') ? 'open' : ''}" id="drawer-ava">
           <div class="drawer-header"><img class="src-favicon" src="${FAVICONS.avamovie}"/><span>تنظیمات و کاتالوگ‌های AvaMovie</span></div>
           <div class="catalog-list">
-            <label class="cat-chip"><input type="checkbox" name="ava_cat" value="movies" checked/> فیلم‌ها</label>
-            <label class="cat-chip"><input type="checkbox" name="ava_cat" value="series" checked/> سریال‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="avamovie_cat" value="movies"${catSel('avamovie','movies')}/> فیلم‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="avamovie_cat" value="series"${catSel('avamovie','series')}/> سریال‌ها</label>
           </div>
           <div class="form-inputs-grid">
             <div class="form-group"><label>کوکی حساب (Cookie)</label><input type="password" name="avaCookie" class="ltr-input" value="${esc(cookieValue)}" placeholder="your cookie here"/></div>
@@ -279,8 +285,8 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
         <div class="config-drawer ${isSel('digimovie') ? 'open' : ''}" id="drawer-digi">
           <div class="drawer-header"><img class="src-favicon" src="${FAVICONS.digimovie}"/><span>تنظیمات و کاتالوگ‌های DigiMovie</span></div>
           <div class="catalog-list">
-            <label class="cat-chip"><input type="checkbox" name="digi_cat" value="movies" checked/> فیلم‌ها</label>
-            <label class="cat-chip"><input type="checkbox" name="digi_cat" value="series" checked/> سریال‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="digimovie_cat" value="movies"${catSel('digimovie','movies')}/> فیلم‌ها</label>
+            <label class="cat-chip"><input type="checkbox" name="digimovie_cat" value="series"${catSel('digimovie','series')}/> سریال‌ها</label>
           </div>
           <div class="form-inputs-grid">
             <div class="form-group"><label>کوکی حساب (Cookie)</label><input type="password" name="digiCookie" class="ltr-input" value="${esc(digiCookieValue)}" placeholder="your cookie here"/></div>
@@ -310,7 +316,6 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
     });
   });
 
-  // لاجیک باز و بسته شدن کاتالوگ‌ها
   const toggleDrawer = (chkId, drawerId) => {
     var chk = document.getElementById(chkId);
     var drawer = document.getElementById(drawerId);
@@ -322,7 +327,6 @@ body { font-family: 'Vazirmatn', sans-serif; background-color: var(--bg); color:
   toggleDrawer('chk-ava', 'drawer-ava');
   toggleDrawer('chk-digi', 'drawer-digi');
 
-  // بررسی وضعیت
   function setStatus(card, isOnline) {
     var pill = card.querySelector('.status-pill');
     var txt = card.querySelector('.st-txt');
