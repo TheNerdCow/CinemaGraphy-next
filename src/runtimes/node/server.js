@@ -134,6 +134,26 @@ function toMetas(items, providerKey) {
   })
 }
 
+let statusCache = { ts: 0, data: null }
+
+async function checkDomainReachable(url) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 5000)
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+    })
+    clearTimeout(timeout)
+    return res.status > 0 && res.status < 500
+  } catch {
+    clearTimeout(timeout)
+    return false
+  }
+}
+
 function createApp() {
   const app = express()
   app.use(cors())
@@ -147,6 +167,27 @@ function createApp() {
 
   app.get('/', (req, res) => res.type('html').send(landingHtml({}, req)))
   app.get('/configure', (req, res) => res.type('html').send(landingHtml({}, req)))
+
+  app.get('/api/sources-status', async (_req, res) => {
+    const now = Date.now()
+    if (statusCache.data && now - statusCache.ts < 60_000) {
+      return res.json(statusCache.data)
+    }
+    const cfg = configFromEnv(process.env)
+    const domains = {
+      f2media: cfg.providers?.f2media?.baseUrl || 'https://f2m.site',
+      cinamatic: cfg.providers?.cinamatic?.baseUrl || 'https://cinamatic.ir',
+      aslmoviez: cfg.providers?.aslmoviez?.baseUrl || 'https://aslmoviez.com',
+      avamovie: cfg.providers?.avamovie?.baseUrl || 'https://avamovie.shop',
+      digimovie: cfg.providers?.digimovie?.baseUrl || 'https://digimoviez.com',
+    }
+    const entries = await Promise.all(
+      Object.entries(domains).map(async ([k, u]) => [k, await checkDomainReachable(u)])
+    )
+    const result = Object.fromEntries(entries)
+    statusCache = { ts: now, data: result }
+    res.json(result)
+  })
 
   app.post('/configure', (req, res) => {
     const body = req.body || {}
