@@ -1,7 +1,9 @@
 /**
  * Node runtime — Core + Stremio adapter + providers.
- * CinemaGraphy-next 0.6.4 — clean landing
+ * CinemaGraphy-next 0.6.5 — static brand assets + clean landing
  */
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import cors from 'cors'
 import express from 'express'
 import { loadEnvFile } from './load-env.js'
@@ -23,9 +25,10 @@ import { renderLanding } from './landing.js'
 bootNetwork()
 loadEnvFile('.env')
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.6.4'
+const VERSION = process.env.ADDON_VERSION || '0.6.5'
 
 const FREE_PROVIDERS = ['f2media', 'cinamatic', 'aslmoviez']
 const ALL_PROVIDER_KEYS = [...FREE_PROVIDERS, 'avamovie', 'digimovie']
@@ -129,6 +132,12 @@ function createApp() {
   app.use(cors())
   app.use(express.urlencoded({ extended: true }))
   app.use(express.json({ limit: '64kb' }))
+
+  // Brand assets (logo, bg, fav, mark) — static files in assets/
+  app.use('/assets', express.static(path.join(__dirname, 'assets'), {
+    maxAge: '7d',
+    fallthrough: true,
+  }))
 
   app.get('/', (_req, res) => res.type('html').send(landingHtml()))
   app.get('/configure', (_req, res) => res.type('html').send(landingHtml()))
