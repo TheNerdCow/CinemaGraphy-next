@@ -6,35 +6,41 @@
   <p>
     <a href="https://github.com/TheNerdCow/CinemaGraphy-next/releases"><img src="https://img.shields.io/badge/version-0.6.6-orange.svg" alt="Version"></a>
     <img src="https://img.shields.io/badge/Stremio-Compatible-purple.svg" alt="Stremio">
-    <img src="https://img.shields.io/badge/CF_Workers-Native-blue.svg" alt="Cloudflare Workers">
+    <img src="https://img.shields.io/badge/CF_Workers-Ready-blue.svg" alt="Cloudflare Workers">
+    <img src="https://img.shields.io/badge/Vercel-Ready-blue.svg" alt="Vercel">
   </p>
 </div>
 
 ---
 
 ## 🌟 درباره پروژه
-**CinemaGraphy NEXT** یک افزونه (Addon) مدرن، سبک و چندمنبعی است که به طور ویژه برای دسترسی به آرشیوهای محتوایی ایران در پلتفرم‌های **Stremio** و **Nuvio** طراحی شده است.
+**CinemaGraphy NEXT** یک افزونه (Addon) مدرن، سبک و چندمنبعی است که به طور ویژه برای دسترسی به آرشیوهای محتوایی ایران طراحی شده است. برای حفظ سادگی و کاربری روان، نیازی به تنظیمات پیچیده کاتالوگ نیست؛ فقط منبع را تیک بزنید و استریمیو خودبه‌خود محتوا را یکپارچه می‌کند.
 
 ---
 
-## 🚀 آموزش دیپلوی (اجرا) روی سرور
+## 🚀 آموزش دیپلوی روی سرور (Self-Hosting)
 
-معماری این پروژه کاملاً مدرن شده و با **Cloudflare Workers** (به‌صورت Native) و **Node.js** سازگار است.
+معماری این پروژه کاملاً مدرن شده و با **Cloudflare Workers** (به‌صورت Native) و **Vercel** سازگار است.
 
-### 🌐 روش اول: اجرای کاملاً رایگان روی Cloudflare Workers (از طریق داشبورد کلادفلر)
-با این روش نیازی به دانلود کدها ندارید و همه‌چیز از طریق مرورگر انجام می‌شود:
+### 🌐 روش اول: استقرار مستقیم روی Cloudflare Workers (بدون نیاز به سرور)
+با این روش نیازی به دانلود کدها ندارید و همه‌چیز از طریق داشبورد کلادفلر انجام می‌شود:
 
 1. وارد حساب کاربری خود در **Cloudflare Dashboard** شوید.
 2. از منوی سمت چپ به بخش **Workers & Pages** بروید.
 3. روی دکمه آبی‌رنگ **Create application** کلیک کنید.
 4. تب **Workers** را انتخاب کرده و دکمه **Connect to GitHub** را بزنید.
 5. وارد حساب گیت‌هاب خود شوید و مخزن `CinemaGraphy-next` را انتخاب کنید.
-6. کلادفلر به صورت خودکار فایل `wrangler.toml` را در کدهای شما پیدا کرده و پروژه را در کمتر از ۱ دقیقه نصب و اجرا (Deploy) می‌کند. تمام! لینک آماده‌ی شما در دسترستان قرار می‌گیرد.
+6. کلادفلر به صورت خودکار فایل `wrangler.toml` را در کدهای شما پیدا کرده و پروژه را دیپلوی می‌کند. تمام!
 
----
+### 💻 روش دوم: دیپلوی روی Vercel
+ورسل (Vercel) هم به صورت بومی از این ساختار پشتیبانی می‌کند:
+1. در سایت **Vercel.com** لاگین کنید.
+2. روی **Add New -> Project** کلیک کنید.
+3. گیت‌هاب خود را متصل کرده و این ریپازیتوری را `Import` کنید.
+4. دکمه Deploy را بزنید.
 
-### 💻 روش دوم: اجرا روی سرور شخصی (Node.js)
-اگر می‌خواهید روی هاست شخصی یا VPS پروژه را بالا بیاورید:
+### 🐳 روش سوم: دیپلوی با Docker / Node.js
+اگر سرور اختصاصی دارید:
 ```bash
 git clone [https://github.com/TheNerdCow/CinemaGraphy-next.git](https://github.com/TheNerdCow/CinemaGraphy-next.git)
 cd CinemaGraphy-next

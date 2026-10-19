@@ -1,7 +1,4 @@
 name = "cinemagraphy-next"
-main = "src/runtimes/node/server.js"
+main = "worker.js"
 compatibility_date = "2024-02-28"
 compatibility_flags = ["nodejs_compat"]
-
-# این تنظیمات به کلادفلر می‌گوید فایل اصلی کجاست 
-# و قابلیت‌های Node.js را برای افزونه شما روشن می‌کند.
