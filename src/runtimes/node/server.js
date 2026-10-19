@@ -1,6 +1,6 @@
 /**
  * Node runtime — Core + Stremio adapter + providers.
- * CinemaGraphy-next 0.6.5 — static brand assets + clean landing
+ * CinemaGraphy-next 0.6.6 — cmplugin-style compact landing + JPG assets
  */
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -28,7 +28,7 @@ loadEnvFile('.env')
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const log = createLogger(process.env.LOG_LEVEL || 'info')
 const PORT = Number(process.env.PORT) || 7000
-const VERSION = process.env.ADDON_VERSION || '0.6.5'
+const VERSION = process.env.ADDON_VERSION || '0.6.6'
 
 const FREE_PROVIDERS = ['f2media', 'cinamatic', 'aslmoviez']
 const ALL_PROVIDER_KEYS = [...FREE_PROVIDERS, 'avamovie', 'digimovie']
@@ -100,7 +100,13 @@ function buildPersonalConfig({ providersEnabled, avaCookie, digiCookie, avaBaseU
   return { providersEnabled: unique, providers: Object.keys(providers).length ? providers : undefined }
 }
 
-function landingHtml(opts = {}) {
+function landingHtml(opts = {}, req = null) {
+  let hostManifest = '/manifest.json'
+  if (req) {
+    const host = req.get('x-forwarded-host') || req.get('host') || ('localhost:' + PORT)
+    const proto = (req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim()
+    hostManifest = proto + '://' + host + '/manifest.json'
+  }
   return renderLanding({
     version: VERSION,
     freeProviders: FREE_PROVIDERS,
@@ -111,6 +117,7 @@ function landingHtml(opts = {}) {
     digiCookieValue: opts.digiCookieValue || '',
     avaBaseUrl: opts.avaBaseUrl || '',
     digiBaseUrl: opts.digiBaseUrl || '',
+    hostManifest,
   })
 }
 
@@ -133,14 +140,13 @@ function createApp() {
   app.use(express.urlencoded({ extended: true }))
   app.use(express.json({ limit: '64kb' }))
 
-  // Brand assets (logo, bg, fav, mark) — static files in assets/
   app.use('/assets', express.static(path.join(__dirname, 'assets'), {
     maxAge: '7d',
     fallthrough: true,
   }))
 
-  app.get('/', (_req, res) => res.type('html').send(landingHtml()))
-  app.get('/configure', (_req, res) => res.type('html').send(landingHtml()))
+  app.get('/', (req, res) => res.type('html').send(landingHtml({}, req)))
+  app.get('/configure', (req, res) => res.type('html').send(landingHtml({}, req)))
 
   app.post('/configure', (req, res) => {
     const body = req.body || {}
@@ -155,15 +161,15 @@ function createApp() {
 
     if (!providers.length) providers = [...FREE_PROVIDERS]
     if (providers.includes('avamovie') && !cookie) {
-      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'آوا تیک خورده ولی کوکی خالی است' }, selected: providers, digiCookieValue: digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }))
+      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'آوا تیک خورده ولی کوکی خالی است' }, selected: providers, digiCookieValue: digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
     }
     if (providers.includes('digimovie') && !digiCookie) {
-      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'دیجی تیک خورده ولی کوکی خالی است' }, selected: providers, cookieValue: cookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }))
+      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'دیجی تیک خورده ولی کوکی خالی است' }, selected: providers, cookieValue: cookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
     }
 
     const cfg = buildPersonalConfig({ providersEnabled: providers, avaCookie: cookie, digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase })
     const token = encodeUserConfig(cfg)
-    if (!token) return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'ساخت کانفیگ ناموفق بود' }, selected: providers }))
+    if (!token) return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'ساخت کانفیگ ناموفق بود' }, selected: providers }, req))
 
     if (cookie) setSessionCookie('avamovie', cookie)
     if (digiCookie) setSessionCookie('digimovie', digiCookie)
@@ -179,13 +185,13 @@ function createApp() {
       digiCookieValue: digiCookie,
       avaBaseUrl: avaBase,
       digiBaseUrl: digiBase,
-    }))
+    }, req))
   })
 
-  app.post('/session/clear', (_req, res) => {
+  app.post('/session/clear', (req, res) => {
     setSessionCookie('avamovie', '')
     setSessionCookie('digimovie', '')
-    res.type('html').send(landingHtml({ flash: { ok: true, msg: 'نشست سرور پاک شد' } }))
+    res.type('html').send(landingHtml({ flash: { ok: true, msg: 'نشست سرور پاک شد' } }, req))
   })
 
   app.get('/health', (_req, res) => {
@@ -273,19 +279,11 @@ function createApp() {
           items = await provider.search(search, { config: cfg, skip, timeoutMs: 22000 })
           items = (items || []).filter((it) => (it.type || wantType) === wantType)
         } else if (genre && provider.browseGenre) {
-          items = await provider.browseGenre(wantType, genre, {
-            config: cfg,
-            skip,
-            timeoutMs: 22000,
-          })
+          items = await provider.browseGenre(wantType, genre, { config: cfg, skip, timeoutMs: 22000 })
         } else if (provider.browse) {
           items = await provider.browse(id, { config: cfg, skip, timeoutMs: 22000 })
         } else if (provider.browseType) {
-          items = await provider.browseType(wantType, {
-            config: cfg,
-            skip,
-            timeoutMs: 22000,
-          })
+          items = await provider.browseType(wantType, { config: cfg, skip, timeoutMs: 22000 })
         }
         return res.json({ metas: toMetas(items, providerKey) })
       }
