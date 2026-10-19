@@ -1,4 +1,4 @@
-/** Paths for static brand assets (user PNGs) */
+/** Paths for static brand assets */
 export const ASSET_BG = '/assets/Bg.jpg'
 export const ASSET_LOGO = '/assets/MainLogo.jpg'
 export const ASSET_MARK = '/assets/favandinstall.png'
