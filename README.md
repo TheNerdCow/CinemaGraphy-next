@@ -6,7 +6,6 @@
   <p>
     <a href="https://github.com/TheNerdCow/CinemaGraphy-next/releases"><img src="https://img.shields.io/badge/version-0.6.6-orange.svg" alt="Version"></a>
     <img src="https://img.shields.io/badge/Stremio-Compatible-purple.svg" alt="Stremio">
-    <img src="https://img.shields.io/badge/Render-Ready-blue.svg" alt="Render.com">
     <img src="https://img.shields.io/badge/Vercel-Ready-blue.svg" alt="Vercel">
   </p>
 </div>
@@ -14,28 +13,23 @@
 ---
 
 ## 🌟 درباره پروژه
-**CinemaGraphy NEXT** یک افزونه (Addon) مدرن، سبک و چندمنبعی است که به طور ویژه برای دسترسی به آرشیوهای محتوایی ایران طراحی شده است. برای حفظ سادگی و کاربری روان، تنظیمات پیچیده کاتالوگ حذف شده‌اند؛ فقط کافیست منبع را تیک بزنید و استریمیو خودبه‌خود محتوا را یکپارچه می‌کند.
+**CinemaGraphy NEXT** یک افزونه (Addon) مدرن، سبک و چندمنبعی است که به طور ویژه برای دسترسی به آرشیوهای محتوایی ایران در پلتفرم‌های **Stremio** و **Nuvio** طراحی شده است.
 
 ---
 
-## 🚀 آموزش دیپلوی (اجرا) رایگان و پایدار
+## ✨ ویژگی‌های کلیدی
+* **منابع معتبر ایرانی:** پشتیبانی از دامنه‌های بدون فیلتر (`F2Media`, `Cinamatic`, `AslMoviez`, `AvaMovie`, `DigiMovie`).
+* **کشینگ هوشمند (ضد اسپم):** ذخیره نتایج در حافظه موقت سرور برای جلوگیری از مسدود شدن آی‌پی توسط سایت‌های فیلم.
+* **صفحه پیکربندی Liquid Glass:** طراحی شده به صورت تک‌صفحه‌ای با افکت شیشه‌ای مدرن. کاربر منابع دلخواه را تیک می‌زند و تمام کاتالوگ‌های آن منبع در استریمیو ظاهر می‌شود.
 
-این پروژه بر بستر **Node.js (Express)** نوشته شده است. پلتفرم‌هایی مثل Cloudflare Workers به دلیل نداشتن هارد دیسک (File System) مناسب این پروژه نیستند و باعث کرش کردن سرور می‌شوند. بهترین راه‌حل‌های جایگزین و رایگان:
+---
 
-### 🌐 روش اول: استقرار رایگان در Render.com (پیشنهاد ویژه)
-Render بهترین و سازگارترین میزبان رایگان برای برنامه‌های Node.js است:
-1. در سایت [Render.com](https://render.com) ثبت‌نام کنید.
-2. روی دکمه **New** کلیک کرده و **Web Service** را انتخاب کنید.
-3. گیت‌هاب خود را متصل کرده و این ریپازیتوری را انتخاب کنید.
-4. تمام تنظیمات را روی حالت پیش‌فرض بگذارید (Build Command: `npm install` و Start Command: `npm start`) و دکمه **Deploy** را بزنید.
+## 🚀 آموزش دیپلوی (اجرا) روی سرور
 
-### 🔺 روش دوم: دیپلوی با Vercel
-ورسل (Vercel) نیز به راحتی این سرور را اجرا می‌کند:
-1. در سایت **Vercel.com** لاگین کنید.
-2. روی **Add New -> Project** کلیک کنید.
-3. گیت‌هاب خود را متصل کرده و این ریپازیتوری را `Import` کنید و Deploy را بزنید.
+هسته قدرتمند این پروژه (Express.js) قابلیت اجرا روی اکثر پلتفرم‌های میزبانی از جمله سرورهای ابری، VPS و Vercel را دارد.
 
-### 💻 روش سوم: اجرا روی سرور شخصی (VPS / Docker)
+### ۱. اجرای استاندارد روی VPS / هاست (Node.js) - پیشنهاد اصلی
+برای پایداری ۱۰۰٪، نصب روی سرور لینوکس بهترین گزینه است:
 ```bash
 git clone [https://github.com/TheNerdCow/CinemaGraphy-next.git](https://github.com/TheNerdCow/CinemaGraphy-next.git)
 cd CinemaGraphy-next
