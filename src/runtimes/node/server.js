@@ -1,7 +1,6 @@
 /**
  * Node runtime — Core + Stremio adapter + providers.
- * CinemaGraphy-next 0.6.6 — Liquid Glass Edition (Stable UI)
- * Features: Express Core, Smart Caching, Vercel/Node.js Ready
+ * CinemaGraphy-next 0.6.6 — Restored Original Working Logic + Safe Cache
  */
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,7 +18,7 @@ import { createAslMoviezProvider } from '../../providers/aslmoviez/index.js'
 import { createAvaMovieProvider } from '../../providers/avamovie/index.js'
 import { createDigiMovieProvider } from '../../providers/digimovie/index.js'
 import { fromStremioProviderId, toStremioProviderId } from '../../core/ids/namespace.js'
-import { setSessionCookie, getSessionCookie } from './session-store.js'
+import { setSessionCookie, getSessionCookie, hasSessionCookie } from './session-store.js'
 import { bootNetwork } from './boot-net.js'
 import { renderLanding } from './landing.js'
 
@@ -41,30 +40,24 @@ registerProvider(createAslMoviezProvider({ logger: log }))
 registerProvider(createAvaMovieProvider({ logger: log }))
 registerProvider(createDigiMovieProvider({ logger: log }))
 
-// ==========================================
-// 🛡️ سیستم کشینگ پیشرفته (برای جلوگیری از لیمیت شدن آی‌پی)
-// ==========================================
+// کش امن: فقط جواب‌های پر را نگه می‌دارد و هرگز جواب خالی را کش نمی‌کند
 const memCache = new Map()
 const CACHE_TTL = {
-  catalog: 4 * 60 * 60 * 1000, // ۴ ساعت برای لیست فیلم‌ها
-  meta: 24 * 60 * 60 * 1000,   // ۲۴ ساعت برای توضیحات یک فیلم
-  stream: 30 * 60 * 1000       // ۳۰ دقیقه برای لینک‌های پخش
+  catalog: 2 * 60 * 60 * 1000, // ۲ ساعت
+  meta: 12 * 60 * 60 * 1000,   // ۱۲ ساعت
+  stream: 20 * 60 * 1000       // ۲۰ دقیقه
 }
 
-async function getCached(key, ttl, fetchFn) {
+async function getSafeCache(key, ttl, fn) {
   const now = Date.now()
-  const cached = memCache.get(key)
-  if (cached && cached.expire > now) return cached.data
-  try {
-    const data = await fetchFn()
-    if (data !== undefined && data !== null) {
-      memCache.set(key, { data, expire: now + ttl })
-    }
-    return data
-  } catch (err) {
-    if (cached) return cached.data
-    throw err
+  const hit = memCache.get(key)
+  if (hit && hit.exp > now) return hit.val
+  const val = await fn()
+  const isNotEmpty = Array.isArray(val) ? val.length > 0 : Boolean(val)
+  if (isNotEmpty) {
+    memCache.set(key, { val, exp: now + ttl })
   }
+  return val
 }
 
 function deepMergeProviders(a = {}, b = {}) {
@@ -82,8 +75,13 @@ function resolveConfig(req) {
     cfg = applyMode({
       ...server,
       ...overlay,
+      resources: { ...server.resources, ...(overlay.resources || {}) },
+      meta: { ...server.meta, ...(overlay.meta || {}) },
+      ui: { ...server.ui, ...(overlay.ui || {}) },
       providers: deepMergeProviders(server.providers, overlay.providers),
-      providersEnabled: overlay.providersEnabled?.length ? overlay.providersEnabled : server.providersEnabled,
+      providersEnabled: overlay.providersEnabled?.length
+        ? overlay.providersEnabled
+        : server.providersEnabled,
     })
   }
   if (!cfg.providers?.avamovie?.cookie) {
@@ -97,33 +95,30 @@ function resolveConfig(req) {
   return cfg
 }
 
+// دقیقاً منطق اورجینال و سالم پروژه خودت برای ساخت کانفیگ شخصی
 function buildPersonalConfig({ providersEnabled, avaCookie, digiCookie, avaBaseUrl, digiBaseUrl }) {
   const enabled = (providersEnabled || []).filter((k) => ALL_PROVIDER_KEYS.includes(k))
   const unique = [...new Set(enabled.length ? enabled : FREE_PROVIDERS)]
   const providers = {}
-  
-  for (const k of unique) providers[k] = { enabled: true }
-
   const ava = String(avaCookie || '').trim()
   const digi = String(digiCookie || '').trim()
   const avaBase = String(avaBaseUrl || '').trim()
   const digiBase = String(digiBaseUrl || '').trim()
-  
   if (unique.includes('avamovie')) {
-    if (!ava) delete providers.avamovie
+    if (!ava) unique.splice(unique.indexOf('avamovie'), 1)
     else {
-      providers.avamovie.cookie = ava.slice(0, 4096)
+      providers.avamovie = { cookie: ava.slice(0, 4096), enabled: true }
       if (avaBase.startsWith('http')) providers.avamovie.baseUrl = avaBase.replace(/\/+$/, '').slice(0, 200)
     }
   }
   if (unique.includes('digimovie')) {
-    if (!digi) delete providers.digimovie
+    if (!digi) unique.splice(unique.indexOf('digimovie'), 1)
     else {
-      providers.digimovie.cookie = digi.slice(0, 4096)
+      providers.digimovie = { cookie: digi.slice(0, 4096), enabled: true }
       if (digiBase.startsWith('http')) providers.digimovie.baseUrl = digiBase.replace(/\/+$/, '').slice(0, 200)
     }
   }
-  return { providersEnabled: Object.keys(providers), providers }
+  return { providersEnabled: unique, providers: Object.keys(providers).length ? providers : undefined }
 }
 
 function landingHtml(opts = {}, req = null) {
@@ -165,7 +160,7 @@ async function checkDomainReachable(url) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 6000)
   try {
-    const res = await fetch(url, {
+    await fetch(url, {
       method: 'GET',
       redirect: 'follow',
       signal: controller.signal,
@@ -173,7 +168,7 @@ async function checkDomainReachable(url) {
     })
     clearTimeout(timeout)
     return true
-  } catch (err) {
+  } catch {
     clearTimeout(timeout)
     return false
   }
@@ -204,7 +199,9 @@ function createApp() {
       avamovie: cfg.providers?.avamovie?.baseUrl || 'https://avadel.top',
       digimovie: cfg.providers?.digimovie?.baseUrl || 'https://digimoviez53.top',
     }
-    const entries = await Promise.all(Object.entries(domains).map(async ([k, u]) => [k, await checkDomainReachable(u)]))
+    const entries = await Promise.all(
+      Object.entries(domains).map(async ([k, u]) => [k, await checkDomainReachable(u)])
+    )
     const result = Object.fromEntries(entries)
     statusCache = { ts: now, data: result }
     res.json(result)
@@ -216,15 +213,18 @@ function createApp() {
     if (!providers) providers = []
     if (!Array.isArray(providers)) providers = [providers]
     providers = providers.map(String).filter((k) => ALL_PROVIDER_KEYS.includes(k))
-
     const cookie = String(body.avaCookie || '').trim()
     const digiCookie = String(body.digiCookie || '').trim()
-    const avaBase = String(body.avaBaseUrl || 'https://avadel.top').trim()
-    const digiBase = String(body.digiBaseUrl || 'https://digimoviez53.top').trim()
+    const avaBase = String(body.avaBaseUrl || '').trim()
+    const digiBase = String(body.digiBaseUrl || '').trim()
 
     if (!providers.length) providers = [...FREE_PROVIDERS]
-    if (providers.includes('avamovie') && !cookie) return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'آوا تیک خورده ولی کوکی خالی است' }, selected: providers, digiCookieValue: digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
-    if (providers.includes('digimovie') && !digiCookie) return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'دیجی تیک خورده ولی کوکی خالی است' }, selected: providers, cookieValue: cookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
+    if (providers.includes('avamovie') && !cookie) {
+      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'آوا تیک خورده ولی کوکی خالی است' }, selected: providers, digiCookieValue: digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
+    }
+    if (providers.includes('digimovie') && !digiCookie) {
+      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'دیجی تیک خورده ولی کوکی خالی است' }, selected: providers, cookieValue: cookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
+    }
 
     const cfg = buildPersonalConfig({ providersEnabled: providers, avaCookie: cookie, digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase })
     const token = encodeUserConfig(cfg)
@@ -253,14 +253,24 @@ function createApp() {
     res.type('html').send(landingHtml({ flash: { ok: true, msg: 'نشست سرور پاک شد' } }, req))
   })
 
-  app.get('/health', (_req, res) => res.json({ ok: true, service: 'cinemagraphy-next', version: VERSION }))
+  app.get('/health', (_req, res) => {
+    res.json({
+      ok: true,
+      service: 'cinemagraphy-next',
+      version: VERSION,
+      providers: listEnabledProviders(configFromEnv(process.env)).map((p) => p.key),
+    })
+  })
 
   function manifestHandler(req, res) {
     try {
       const cfg = resolveConfig(req)
-      const providers = listEnabledProviders(cfg).map((p) => ({ key: p.key, name: p.name, capabilities: p.capabilities }))
+      const providers = listEnabledProviders(cfg).map((p) => ({
+        key: p.key,
+        name: p.name,
+        capabilities: p.capabilities,
+      }))
       const manifest = buildStremioManifest(cfg, providers)
-      
       const host = req.get('x-forwarded-host') || req.get('host') || ('localhost:' + PORT)
       const proto = (req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim()
       manifest.logo = `${proto}://${host}/assets/favandinstall.png`
@@ -273,16 +283,17 @@ function createApp() {
     }
   }
 
+  // دقیقاً تابع اورجینال کاتالوگ که همه کاتالوگ‌ها را بدون استثنا می‌آورد
   async function catalogHandler(req, res) {
     try {
       const cfg = resolveConfig(req)
       const type = req.params.type
-      let id = String(req.params.id || '').replace('.json', '')
-      
+      let id = String(req.params.id || '')
+      if (id.endsWith('.json')) id = id.slice(0, -5)
       const extraArgs = req.params.extraArgs || ''
       const extra = {}
       if (extraArgs) {
-        const raw = extraArgs.replace('.json', '')
+        const raw = extraArgs.endsWith('.json') ? extraArgs.slice(0, -5) : extraArgs
         for (const part of raw.split('&')) {
           const eq = part.indexOf('=')
           if (eq < 0) continue
@@ -292,38 +303,67 @@ function createApp() {
         }
       }
       const search = extra.search ? String(extra.search) : ''
-      const genre = (extra.genre && !/^all$/i.test(extra.genre)) ? String(extra.genre) : ''
+      const genreRaw = extra.genre ? String(extra.genre) : ''
+      const genre = genreRaw && !/^all$/i.test(genreRaw) ? genreRaw : ''
       const skip = extra.skip ? Number(extra.skip) : 0
 
-      let providerKey = null
-      for (const k of ALL_PROVIDER_KEYS) {
-        if (id.startsWith(k + '_') || id.includes(':' + k + ':')) { providerKey = k; break; }
+      const typeCatalog = id.match(/^([a-z0-9]+)_(movies|series)$/i)
+      if (typeCatalog) {
+        const providerKey = typeCatalog[1].toLowerCase()
+        const provider = getProvider(providerKey)
+        if (!provider || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) {
+          return res.json({ metas: [] })
+        }
+        const wantType = type === 'series' ? 'series' : 'movie'
+        const cacheKey = `tc:${providerKey}:${wantType}:${search}:${genre}:${skip}`
+        const metas = await getSafeCache(cacheKey, CACHE_TTL.catalog, async () => {
+          let items = []
+          if (search && provider.search) {
+            items = await provider.search(search, { config: cfg, skip, timeoutMs: 18000 })
+            items = (items || []).filter((it) => (it.type || wantType) === wantType)
+          } else if (genre && provider.browseGenre) {
+            items = await provider.browseGenre(wantType, genre, { config: cfg, skip, timeoutMs: 18000 })
+          } else if (provider.browseType) {
+            items = await provider.browseType(wantType, { config: cfg, skip, timeoutMs: 18000 })
+          }
+          return toMetas(items, providerKey)
+        })
+        return res.json({ metas: metas || [] })
       }
-      
+
+      let providerKey = null
+      for (const k of ['cinamatic', 'aslmoviez', 'avamovie', 'digimovie', 'f2media']) {
+        if (id.startsWith(k + '_')) {
+          providerKey = k
+          break
+        }
+      }
       if (providerKey) {
         const provider = getProvider(providerKey)
-        if (!provider || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) return res.json({ metas: [] })
-        
+        if (!provider || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) {
+          return res.json({ metas: [] })
+        }
         const wantType = type === 'series' ? 'series' : 'movie'
-        const cacheKey = `cat_${providerKey}_${wantType}_${id}_${search}_${genre}_${skip}`
-        
-        const metas = await getCached(cacheKey, CACHE_TTL.catalog, async () => {
+        const cacheKey = `cat:${providerKey}:${id}:${wantType}:${search}:${genre}:${skip}`
+        const metas = await getSafeCache(cacheKey, CACHE_TTL.catalog, async () => {
           let items = []
-          if (search && provider.search) items = await provider.search(search, { config: cfg, skip, timeoutMs: 22000 })
-          else if (genre && provider.browseGenre) items = await provider.browseGenre(wantType, genre, { config: cfg, skip, timeoutMs: 22000 })
-          else if (provider.browse) items = await provider.browse(id, { config: cfg, skip, timeoutMs: 22000 })
-          else if (provider.browseType) items = await provider.browseType(wantType, { config: cfg, skip, timeoutMs: 22000 })
-          
-          // حل مشکل اصلی باگ کاتالوگ (جلوگیری از کرش کردن استخراجگر)
-          const safeItems = Array.isArray(items) ? items : []
-          return toMetas(safeItems.filter(it => (it.type || wantType) === wantType), providerKey)
+          if (search && provider.search) {
+            items = await provider.search(search, { config: cfg, skip, timeoutMs: 22000 })
+            items = (items || []).filter((it) => (it.type || wantType) === wantType)
+          } else if (genre && provider.browseGenre) {
+            items = await provider.browseGenre(wantType, genre, { config: cfg, skip, timeoutMs: 22000 })
+          } else if (provider.browse) {
+            items = await provider.browse(id, { config: cfg, skip, timeoutMs: 22000 })
+          } else if (provider.browseType) {
+            items = await provider.browseType(wantType, { config: cfg, skip, timeoutMs: 22000 })
+          }
+          return toMetas(items, providerKey)
         })
-        
         return res.json({ metas: metas || [] })
       }
       res.json({ metas: [] })
     } catch (err) {
-      log.error('catalog error', err)
+      log.error('catalog', err)
       res.json({ metas: [] })
     }
   }
@@ -331,19 +371,20 @@ function createApp() {
   async function metaHandler(req, res) {
     try {
       const cfg = resolveConfig(req)
-      let id = String(req.params.id || '').replace('.json', '')
+      let id = String(req.params.id || '')
+      if (id.endsWith('.json')) id = id.slice(0, -5)
       const parsed = fromStremioProviderId(id)
       if (!parsed) return res.json({ meta: null })
       const provider = getProvider(parsed.providerKey)
-      if (!provider || !provider.getDetail || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) return res.json({ meta: null })
-      
-      const cacheKey = `meta_${parsed.providerKey}_${parsed.itemId}_${req.params.type}`
-      
-      const metaObj = await getCached(cacheKey, CACHE_TTL.meta, async () => {
+      if (!provider || !provider.getDetail || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) {
+        return res.json({ meta: null })
+      }
+      const cacheKey = `meta:${parsed.providerKey}:${parsed.itemId}:${req.params.type}`
+      const meta = await getSafeCache(cacheKey, CACHE_TTL.meta, async () => {
         const detail = await provider.getDetail(parsed.itemId, req.params.type, { config: cfg })
         if (!detail) return null
         const metaId = toStremioProviderId(parsed.providerKey, parsed.itemId)
-        const meta = {
+        const m = {
           id: metaId,
           type: detail.type || req.params.type,
           name: detail.title || id,
@@ -355,14 +396,18 @@ function createApp() {
           imdbRating: detail.imdbRating,
         }
         if (detail.type === 'series' && detail.videos && detail.videos.length) {
-          meta.videos = detail.videos.map((v) => ({ id: metaId + ':' + v.season + ':' + v.episode, title: v.title || ('S' + v.season + 'E' + v.episode), season: v.season, episode: v.episode }))
+          m.videos = detail.videos.map((v) => ({
+            id: metaId + ':' + v.season + ':' + v.episode,
+            title: v.title || ('S' + v.season + 'E' + v.episode),
+            season: v.season,
+            episode: v.episode,
+          }))
         }
-        return meta
+        return m
       })
-      
-      res.json({ meta: metaObj })
+      res.json({ meta: meta || null })
     } catch (err) {
-      log.error('meta error', err)
+      log.error('meta', err)
       res.json({ meta: null })
     }
   }
@@ -370,24 +415,31 @@ function createApp() {
   async function streamHandler(req, res) {
     try {
       const cfg = resolveConfig(req)
-      let id = String(req.params.id || '').replace('.json', '')
+      let id = String(req.params.id || '')
+      if (id.endsWith('.json')) id = id.slice(0, -5)
       const parsed = fromStremioProviderId(id)
       if (!parsed) return res.json({ streams: [] })
       const provider = getProvider(parsed.providerKey)
-      if (!provider || !provider.getDetail || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) return res.json({ streams: [] })
-      
-      const cacheKey = `stream_${parsed.providerKey}_${parsed.itemId}_${req.params.type}_${parsed.season || 0}_${parsed.episode || 0}`
-      
-      const streamsResult = await getCached(cacheKey, CACHE_TTL.stream, async () => {
+      if (!provider || !provider.getDetail || (typeof provider.isEnabled === 'function' && !provider.isEnabled(cfg))) {
+        return res.json({ streams: [] })
+      }
+      const cacheKey = `stream:${parsed.providerKey}:${parsed.itemId}:${req.params.type}:${parsed.season || 0}:${parsed.episode || 0}`
+      const streams = await getSafeCache(cacheKey, CACHE_TTL.stream, async () => {
         const detail = await provider.getDetail(parsed.itemId, req.params.type, { config: cfg })
         if (!detail) return []
-        const streams = await provider.getStreams(detail, { season: parsed.season, episode: parsed.episode })
-        return (streams || []).map((s) => ({ name: s.name || s.quality || 'HD', title: s.title, url: s.url }))
+        const rawStreams = await provider.getStreams(detail, {
+          season: parsed.season,
+          episode: parsed.episode,
+        })
+        return (rawStreams || []).map((s) => ({
+          name: s.name || s.quality || 'HD',
+          title: s.title,
+          url: s.url,
+        }))
       })
-      
-      res.json({ streams: streamsResult || [] })
+      res.json({ streams: streams || [] })
     } catch (err) {
-      log.error('stream error', err)
+      log.error('stream', err)
       res.json({ streams: [] })
     }
   }
@@ -399,9 +451,7 @@ function createApp() {
     app.get(prefix + '/catalog/:type/:id.json', catalogHandler)
     app.get(prefix + '/catalog/:type/:id', catalogHandler)
     app.get(prefix + '/meta/:type/:id.json', metaHandler)
-    app.get(prefix + '/c/:config/meta/:type/:id.json', metaHandler)
     app.get(prefix + '/stream/:type/:id.json', streamHandler)
-    app.get(prefix + '/c/:config/stream/:type/:id.json', streamHandler)
   }
 
   return app
