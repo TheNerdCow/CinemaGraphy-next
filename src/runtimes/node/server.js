@@ -46,9 +46,9 @@ registerProvider(createDigiMovieProvider({ logger: log }))
 // ==========================================
 const memCache = new Map()
 const CACHE_TTL = {
-  catalog: 4 * 60 * 60 * 1000, // ۴ ساعت برای لیست کاتالوگ‌ها
-  meta: 24 * 60 * 60 * 1000,   // ۲۴ ساعت برای اطلاعات یک فیلم خاص
-  stream: 30 * 60 * 1000       // ۳۰ دقیقه برای لینک‌های پخش
+  catalog: 4 * 60 * 60 * 1000, 
+  meta: 24 * 60 * 60 * 1000,   
+  stream: 30 * 60 * 1000       
 }
 
 async function getCached(key, ttl, fetchFn) {
@@ -61,13 +61,12 @@ async function getCached(key, ttl, fetchFn) {
   
   try {
     const data = await fetchFn()
-    // فقط در صورتی که داده معتبر باشد آن را کش می‌کنیم (جلوگیری از کش شدن آرایه‌های خالی ناشی از ارور مقطعی)
     if (data && (!Array.isArray(data) || data.length > 0)) {
       memCache.set(key, { data, expire: now + ttl })
     }
     return data
   } catch (err) {
-    if (cached) return cached.data // اگر سایت ارور داد، دیتای تاریخ‌گذشته‌ی قبلی را بده تا افزونه از کار نیفتد
+    if (cached) return cached.data 
     throw err
   }
 }
@@ -302,7 +301,6 @@ const catalogHandler = async (c) => {
       
       const wantType = type === 'series' ? 'series' : 'movie'
       
-      // ساخت کلید کش یکتا بر اساس ریکوئست کاربر
       const cacheKey = `cat_${providerKey}_${wantType}_${id}_${search}_${genre}_${skip}`
       
       const metas = await getCached(cacheKey, CACHE_TTL.catalog, async () => {
@@ -399,17 +397,11 @@ app.get('/c/:config/meta/:type/:id.json', metaHandler)
 app.get('/stream/:type/:id.json', streamHandler)
 app.get('/c/:config/stream/:type/:id.json', streamHandler)
 
-// اجرای ایزوله و امن برای Node.js (دور زدن ارورهای کلادفلر)
-const isNode = typeof process !== 'undefined' && process.release?.name === 'node'
 if (isNode) {
   Promise.all([
-    import('./boot-net.js'),
-    import('./load-env.js'),
     import('@hono/node-server'),
     import('@hono/node-server/serve-static')
-  ]).then(([{ bootNetwork }, { loadEnvFile }, { serve }, { serveStatic }]) => {
-    bootNetwork()
-    loadEnvFile('.env')
+  ]).then(([{ serve }, { serveStatic }]) => {
     app.use('/assets/*', serveStatic({ root: './src/runtimes/node' }))
     serve({ fetch: app.fetch, port: PORT }, (info) => {
       log.info(`Local Node server listening on http://localhost:${info.port}`)
