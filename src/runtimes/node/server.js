@@ -95,8 +95,14 @@ function resolveConfig(req) {
   return cfg
 }
 
-// دقیقاً منطق اورجینال و سالم پروژه خودت برای ساخت کانفیگ شخصی
-function buildPersonalConfig({ providersEnabled, avaCookie, digiCookie, avaBaseUrl, digiBaseUrl }) {
+/** Map UI addonMode → backend mode (full | streams). search_only removed. */
+function mapAddonMode(raw) {
+  const s = String(raw || 'full').toLowerCase().trim()
+  if (s === 'streams' || s === 'streams_only') return 'streams'
+  return 'full'
+}
+
+function buildPersonalConfig({ providersEnabled, avaCookie, digiCookie, avaBaseUrl, digiBaseUrl, addonMode }) {
   const enabled = (providersEnabled || []).filter((k) => ALL_PROVIDER_KEYS.includes(k))
   const unique = [...new Set(enabled.length ? enabled : FREE_PROVIDERS)]
   const providers = {}
@@ -118,7 +124,10 @@ function buildPersonalConfig({ providersEnabled, avaCookie, digiCookie, avaBaseU
       if (digiBase.startsWith('http')) providers.digimovie.baseUrl = digiBase.replace(/\/+$/, '').slice(0, 200)
     }
   }
-  return { providersEnabled: unique, providers: Object.keys(providers).length ? providers : undefined }
+  const mode = mapAddonMode(addonMode)
+  const out = { mode, providersEnabled: unique }
+  if (Object.keys(providers).length) out.providers = providers
+  return out
 }
 
 function landingHtml(opts = {}, req = null) {
@@ -132,6 +141,7 @@ function landingHtml(opts = {}, req = null) {
     version: VERSION,
     freeProviders: FREE_PROVIDERS,
     selected: opts.selected || FREE_PROVIDERS,
+    addonMode: opts.addonMode || 'full',
     flash: opts.flash || null,
     personalPath: opts.personalPath || '',
     cookieValue: opts.cookieValue || '',
@@ -217,18 +227,19 @@ function createApp() {
     const digiCookie = String(body.digiCookie || '').trim()
     const avaBase = String(body.avaBaseUrl || '').trim()
     const digiBase = String(body.digiBaseUrl || '').trim()
+    const addonMode = mapAddonMode(body.addonMode)
 
     if (!providers.length) providers = [...FREE_PROVIDERS]
     if (providers.includes('avamovie') && !cookie) {
-      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'آوا تیک خورده ولی کوکی خالی است' }, selected: providers, digiCookieValue: digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
+      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'آوا تیک خورده ولی کوکی خالی است' }, selected: providers, addonMode, digiCookieValue: digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
     }
     if (providers.includes('digimovie') && !digiCookie) {
-      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'دیجی تیک خورده ولی کوکی خالی است' }, selected: providers, cookieValue: cookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
+      return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'دیجی تیک خورده ولی کوکی خالی است' }, selected: providers, addonMode, cookieValue: cookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase }, req))
     }
 
-    const cfg = buildPersonalConfig({ providersEnabled: providers, avaCookie: cookie, digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase })
+    const cfg = buildPersonalConfig({ providersEnabled: providers, avaCookie: cookie, digiCookie, avaBaseUrl: avaBase, digiBaseUrl: digiBase, addonMode })
     const token = encodeUserConfig(cfg)
-    if (!token) return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'ساخت کانفیگ ناموفق بود' }, selected: providers }, req))
+    if (!token) return res.type('html').send(landingHtml({ flash: { ok: false, msg: 'ساخت کانفیگ ناموفق بود' }, selected: providers, addonMode }, req))
 
     if (cookie) setSessionCookie('avamovie', cookie)
     if (digiCookie) setSessionCookie('digimovie', digiCookie)
@@ -240,6 +251,7 @@ function createApp() {
       flash: { ok: true, msg: 'مانیفست شخصی آماده است — نصب کن یا لینک را کپی کن' },
       personalPath,
       selected: cfg.providersEnabled,
+      addonMode: cfg.mode,
       cookieValue: cookie,
       digiCookieValue: digiCookie,
       avaBaseUrl: avaBase,
