@@ -95,6 +95,7 @@ function resolveConfig(req) {
   return cfg
 }
 
+// دقیقاً منطق اورجینال و سالم پروژه خودت برای ساخت کانفیگ شخصی
 /** Map UI addonMode → backend mode (full | streams). search_only removed. */
 function mapAddonMode(raw) {
   const s = String(raw || 'full').toLowerCase().trim()
