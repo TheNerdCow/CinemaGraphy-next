@@ -1,1 +1,4 @@
-SEE_FILE
+/**
+ * PLACEHOLDER_WILL_FAIL
+ */
+export {}
