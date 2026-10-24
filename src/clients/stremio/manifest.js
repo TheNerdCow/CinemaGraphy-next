@@ -7,6 +7,13 @@ import { movieGenreNames, seriesGenreNames } from '../../providers/f2media/genre
 /** Providers that already ship dedicated browse catalogs (no generic _movies/_series). */
 const BROWSE_ONLY_KEYS = new Set(['f2media', 'cinamatic', 'aslmoviez', 'avamovie', 'digimovie'])
 
+/** Claim token from stremio-addons.net (issuer + signature). */
+const STREMIO_ADDONS_CONFIG = {
+  issuer: 'https://stremio-addons.net',
+  signature:
+    'eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..1pvxWWl0GqDfLV5lXbo5Gg.WCDCxx1gzTdI_LH_al0IWgtmmNmK_wVrIrwngIyZXoMMvqjMnlgjH_l5UiXlEQ9WXXZAXoXuz025VAaf4MgFxOsiZo6gpbRGs5hb5J4ivTweXb4nGi6cIrJzyh-N_3Ap.xa57IRAiCt_d2ltO6AIHmg',
+}
+
 export function buildStremioManifest(config, providers = []) {
   const name = [config.addonName, config.nameSuffix].filter(Boolean).join('')
   const resources = []
@@ -98,5 +105,6 @@ export function buildStremioManifest(config, providers = []) {
       configurationRequired: false,
       p2p: false,
     },
+    stremioAddonsConfig: STREMIO_ADDONS_CONFIG,
   }
 }
