@@ -109,11 +109,11 @@ export function createCinamaticProvider(deps = {}) {
     isEnabled(config) {
       const p = config.providers?.cinamatic
       if (p?.enabled === false) return false
-      // Personal list: must be selected. Cookie optional for catalog; required for streams.
+      // Off on the public manifest. Personal install must tick it.
       if (config.providersEnabled?.length) {
         return config.providersEnabled.includes('cinamatic')
       }
-      return true
+      return false
     },
 
     baseUrl(config) {
