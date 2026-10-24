@@ -17,14 +17,14 @@ export function buildStremioManifest(config, providers = []) {
   if (config.resources.meta) {
     resources.push({
       name: 'meta',
-      types: ['movie', 'series', 'tv'],
+      types: ['movie', 'series'],
       idPrefixes: ['ip', 'tt', 'cg:'],
     })
   }
   if (config.resources.stream) {
     resources.push({
       name: 'stream',
-      types: ['movie', 'series', 'tv'],
+      types: ['movie', 'series'],
       idPrefixes: ['ip', 'tt', 'cg:'],
     })
   }
@@ -91,7 +91,7 @@ export function buildStremioManifest(config, providers = []) {
     description,
     logo: 'https://raw.githubusercontent.com/TheNerdCow/CinemaGraphy/refs/heads/master/logo.png',
     resources,
-    types: ['movie', 'series', 'tv'],
+    types: ['movie', 'series'],
     catalogs,
     behaviorHints: {
       configurable: true,
