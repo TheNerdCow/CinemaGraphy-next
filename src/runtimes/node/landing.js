@@ -20,7 +20,7 @@ function stripProto(u) {
 
 export function renderLanding(opts = {}) {
   const version = opts.version ?? '0.6.6'
-  const free = opts.freeProviders ?? ['f2media', 'cinamatic', 'aslmoviez']
+  const free = opts.freeProviders ?? ['f2media', 'aslmoviez']
   const selected = opts.selected ?? free
   const isSel = (k) => selected.includes(k)
   const selAttr = (k) => (isSel(k) ? ' checked' : '')
@@ -229,13 +229,13 @@ body{font-family:'Vazirmatn',Tahoma,sans-serif;background-color:var(--bg);color:
         <div class="src-info"><img class="src-favicon" src="${FAVICONS.f2media}" alt="F2Media"/><span class="src-name">F2Media</span></div>
         <div class="src-meta"><span class="status-pill"><i class="status-dot"></i><b class="st-txt">بررسی...</b></span><span class="tag-free">رایگان</span></div>
       </div>
-      <div class="source-status-card" data-source="cinamatic" data-domain="cinamatic.top">
-        <div class="src-info"><img class="src-favicon" src="${FAVICONS.cinamatic}" alt="Cinamatic"/><span class="src-name">Cinamatic</span></div>
-        <div class="src-meta"><span class="status-pill"><i class="status-dot"></i><b class="st-txt">بررسی...</b></span><span class="tag-sub">اشتراک</span></div>
-      </div>
       <div class="source-status-card" data-source="aslmoviez" data-domain="aslmoviez.com">
         <div class="src-info"><img class="src-favicon" src="${FAVICONS.aslmoviez}" alt="AslMoviez"/><span class="src-name">AslMoviez</span></div>
         <div class="src-meta"><span class="status-pill"><i class="status-dot"></i><b class="st-txt">بررسی...</b></span><span class="tag-free">رایگان</span></div>
+      </div>
+      <div class="source-status-card" data-source="cinamatic" data-domain="cinamatic.top">
+        <div class="src-info"><img class="src-favicon" src="${FAVICONS.cinamatic}" alt="Cinamatic"/><span class="src-name">Cinamatic</span></div>
+        <div class="src-meta"><span class="status-pill"><i class="status-dot"></i><b class="st-txt">بررسی...</b></span><span class="tag-sub">اشتراک</span></div>
       </div>
       <div class="source-status-card" data-source="avamovie" data-domain="avadel.top">
         <div class="src-info"><img class="src-favicon" src="${FAVICONS.avamovie}" alt="AvaMovie"/><span class="src-name">AvaMovie</span></div>
@@ -255,8 +255,8 @@ body{font-family:'Vazirmatn',Tahoma,sans-serif;background-color:var(--bg);color:
       <span class="sub-label">۱. انتخاب منابع:</span>
       <div class="providers-select-grid">
         <label class="prov-checkbox-wrap"><input type="checkbox" name="providers" value="f2media"${selAttr('f2media')}/><div class="prov-pill-box"><img class="src-favicon" src="${FAVICONS.f2media}" alt=""/><span>F2Media</span><div class="custom-tick"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div></div></label>
-        <label class="prov-checkbox-wrap"><input type="checkbox" id="chk-cina" name="providers" value="cinamatic"${selAttr('cinamatic')}/><div class="prov-pill-box"><img class="src-favicon" src="${FAVICONS.cinamatic}" alt=""/><span>Cinamatic</span><div class="custom-tick"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div></div></label>
         <label class="prov-checkbox-wrap"><input type="checkbox" name="providers" value="aslmoviez"${selAttr('aslmoviez')}/><div class="prov-pill-box"><img class="src-favicon" src="${FAVICONS.aslmoviez}" alt=""/><span>AslMoviez</span><div class="custom-tick"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div></div></label>
+        <label class="prov-checkbox-wrap"><input type="checkbox" id="chk-cina" name="providers" value="cinamatic"${selAttr('cinamatic')}/><div class="prov-pill-box"><img class="src-favicon" src="${FAVICONS.cinamatic}" alt=""/><span>Cinamatic</span><div class="custom-tick"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div></div></label>
         <label class="prov-checkbox-wrap"><input type="checkbox" id="chk-ava" name="providers" value="avamovie"${selAttr('avamovie')}/><div class="prov-pill-box"><img class="src-favicon" src="${FAVICONS.avamovie}" alt=""/><span>AvaMovie</span><div class="custom-tick"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div></div></label>
         <label class="prov-checkbox-wrap"><input type="checkbox" id="chk-digi" name="providers" value="digimovie"${selAttr('digimovie')}/><div class="prov-pill-box"><img class="src-favicon" src="${FAVICONS.digimovie}" alt=""/><span>DigiMovie</span><div class="custom-tick"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div></div></label>
       </div>
