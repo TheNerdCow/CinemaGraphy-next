@@ -20,7 +20,7 @@ function stripProto(u) {
 
 export function renderLanding(opts = {}) {
   const version = opts.version ?? '0.6.6'
-  const free = opts.freeProviders ?? ['f2media', 'aslmoviez']
+  const free = opts.freeProviders ?? ['f2media', 'aslmoviez', 'zardfilm']
   const selected = opts.selected ?? free
   const isSel = (k) => selected.includes(k)
   const selAttr = (k) => (isSel(k) ? ' checked' : '')
@@ -47,6 +47,7 @@ export function renderLanding(opts = {}) {
     f2media: 'https://www.myf2ms.top/favicon.ico',
     cinamatic: 'https://cinamatic.top/wp-content/uploads/2026/06/cropped-46C79B8B-60E5-4483-8245-C8676952D972-32x32.png',
     aslmoviez: 'https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://aslmoviez.com&size=64',
+    zardfilm: 'https://zardfilm.in/favicon.ico',
     avamovie: 'https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://avadel.top&size=64',
     digimovie: ASSET_DIGI_FAV
   }
@@ -539,6 +540,7 @@ body {
       <div class="providers-select-grid">
         <label class="prov-checkbox-wrap"><input type="checkbox" name="providers" value="f2media"${selAttr('f2media')}/><div class="prov-pill-box"><img class="src-favicon" src="${FAVICONS.f2media}" alt=""/><span>F2Media</span><div class="custom-tick"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div></div></label>
         <label class="prov-checkbox-wrap"><input type="checkbox" name="providers" value="aslmoviez"${selAttr('aslmoviez')}/><div class="prov-pill-box"><img class="src-favicon" src="${FAVICONS.aslmoviez}" alt=""/><span>AslMoviez</span><div class="custom-tick"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div></div></label>
+        <label class="prov-checkbox-wrap"><input type="checkbox" name="providers" value="zardfilm"${selAttr('zardfilm')}/><div class="prov-pill-box"><img class="src-favicon" src="${FAVICONS.zardfilm}" alt=""/><span>ZardFilm</span><div class="custom-tick"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div></div></label>
         <label class="prov-checkbox-wrap"><input type="checkbox" id="chk-cina" name="providers" value="cinamatic"${selAttr('cinamatic')}/><div class="prov-pill-box"><img class="src-favicon" src="${FAVICONS.cinamatic}" alt=""/><span>Cinamatic</span><div class="custom-tick"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div></div></label>
         <label class="prov-checkbox-wrap"><input type="checkbox" id="chk-ava" name="providers" value="avamovie"${selAttr('avamovie')}/><div class="prov-pill-box"><img class="src-favicon" src="${FAVICONS.avamovie}" alt=""/><span>AvaMovie</span><div class="custom-tick"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div></div></label>
         <label class="prov-checkbox-wrap"><input type="checkbox" id="chk-digi" name="providers" value="digimovie"${selAttr('digimovie')}/><div class="prov-pill-box"><img class="src-favicon" src="${FAVICONS.digimovie}" alt=""/><span>DigiMovie</span><div class="custom-tick"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div></div></label>
