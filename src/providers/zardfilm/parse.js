@@ -103,7 +103,6 @@ function gapQuality(n) {
 /** Main catalog grid only (newest updates). Not trend/carousel rails. */
 function extractArchiveGrid(html) {
   const s = String(html || '')
-  // Preferred: #zaf-server .zaf-grid
   let idx = s.search(/id=["']zaf-server["']/i)
   if (idx < 0) idx = s.search(/class=["'][^"']*\bzaf-list\b[^"']*["']/i)
   if (idx < 0) idx = s.search(/class=["'][^"']*\bzaf-grid\b[^"']*["']/i)
@@ -113,7 +112,6 @@ function extractArchiveGrid(html) {
     const chunk = endM > 0 ? tail.slice(0, endM) : tail.slice(0, 120000)
     if (/<article[^>]*class="[^"]*\bzc\b/i.test(chunk)) return chunk
   }
-  // Fallback: strip known trend wrappers
   return s
     .replace(/<ol[^>]*class="[^"]*zn-rank[^"]*"[^>]*>[\s\S]*?<\/ol>/gi, '')
     .replace(/<ol[^>]*class="[^"]*zn-rail[^"]*"[^>]*>[\s\S]*?<\/ol>/gi, '')
@@ -121,25 +119,16 @@ function extractArchiveGrid(html) {
     .replace(/<div[^>]*class="[^"]*zrl-track[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
 }
 
-/**
- * Listing: only /movie/{slug}/ cards from the main archive grid (article.zc).
- * Prefer English title (zc-en) + year; series via zc--series / kind tag.
- * @param {'movie'|'series'|null} forceType
- */
 export function parseListingHtml(html, baseUrl, forceType = null) {
   const base = String(baseUrl || 'https://zardfilm.in').replace(/\/+$/, '')
   const results = []
   const seen = new Set()
-
-  // Prefer main archive grid (#zaf-server / .zaf-grid) = تازه‌ترین عناوین
-  // Skip trend rails: .zrl-track, .zn-rank, .zn-rail, .zaf-rails
   let scope = extractArchiveGrid(html)
 
   const articleRe = /<article[^>]*class="[^"]*\bzc\b[^"]*"[^>]*>([\s\S]*?)<\/article>/gi
   let m
   while ((m = articleRe.exec(scope)) !== null) {
     const block = m[0]
-    // only real title pages under /movie/ — skip /news/ and other sections
     const hrefM = block.match(/href=["']((?:https?:\/\/[^"']+)?\/movie\/[^"'#?]+)["']/i)
     if (!hrefM) continue
     const abs = resolveUrl(base, hrefM[1])
@@ -153,7 +142,6 @@ export function parseListingHtml(html, baseUrl, forceType = null) {
     if (!pagePath.startsWith('movie/')) continue
     if (seen.has(pagePath)) continue
 
-    // English title preferred (zc-en span + year)
     const en = block.match(/class="zc-en"[^>]*>[\s\S]*?<span>([^<]+)<\/span>[\s\S]*?<b>(\d{4})<\/b>/i)
     const fa = block.match(/class="zc-fa"[^>]*>([^<]+)</i)
     let title = en ? en[1].trim() : null
@@ -187,7 +175,6 @@ export function parseListingHtml(html, baseUrl, forceType = null) {
     })
   }
 
-  // Fallback: any /movie/ anchors if article parse found nothing
   if (!results.length) {
     const linkRe = /href=["']((?:https?:\/\/[^"']+)?\/movie\/[^"'#?]+)["'][^>]*>/gi
     while ((m = linkRe.exec(scope)) !== null) {
@@ -260,16 +247,12 @@ export function parseDetailMeta(html, baseUrl, pagePath) {
 
 /**
  * Download links only (skip «پخش آنلاین»).
- * Labels match F2/Asl style via formatStreamLabel.
+ * Audio from closest section header (زیرنویس چسبیده / دوبله).
+ * Sorted 4K → 1080 → 720 → 480.
  */
 export function parseDetailStreams(html) {
   const streams = []
   const seen = new Set()
-  const pageAudio = /دوبله(?:ٔ|\s)?فارسی/i.test(html)
-    ? 'dub'
-    : /زیرنویس(?:\s+چسبیده)?(?:\s+فارسی)?/i.test(html)
-      ? 'sub'
-      : null
 
   const anchorRe = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
   let m
@@ -323,20 +306,33 @@ export function parseDetailStreams(html) {
     const info = analyzeMediaUrl(href)
     if (!info.quality && quality) info.quality = quality
     if (!info.quality) info.quality = quality || 'HD'
-    if (/SoftSub|HardSub|\bSUB\b|زیرنویس/i.test(href + ' ' + text)) {
+
+    // URL first, then closest section header above this link
+    if (/SoftSub|HardSub|Hard\.Sub|\bSUB\b/i.test(href)) {
       info.audio = 'sub'
-    } else if (/\bDubbed\b|\b4Dub\b|دوبله/i.test(href + ' ' + text)) {
+    } else if (/\bDubbed\b|\b4Dub\b|Farsi\.Dub/i.test(href)) {
       info.audio = 'dub'
-    } else if (!info.audio && pageAudio) {
-      info.audio = pageAudio
+    } else {
+      const above = html.slice(Math.max(0, m.index - 2500), m.index)
+      let last = null
+      const reHead = /زیرنویس\s*(?:فارسی\s*)?چسبیده|زیرنویس\s*فارسی|دوبله(?:ٔ|\s)?فارسی|دوبله/gi
+      let hm
+      while ((hm = reHead.exec(above)) !== null) {
+        const h = hm[0]
+        last = /دوبله/i.test(h) && !/زیرنویس/i.test(h) ? 'dub' : 'sub'
+      }
+      if (last) info.audio = last
+      else if (/زیرنویس/i.test(text)) info.audio = 'sub'
+      else if (/دوبله/i.test(text)) info.audio = 'dub'
     }
+
     if (!info.encoder) {
       info.encoder = extractEncoderFromText(href) || extractEncoderFromText(text) || 'ZardFilm'
     }
     if (!info.size) info.size = extractSizeFromText(text + ' ' + ctx)
     if (!info.source && /\.ZF\.|\/ZF\./i.test(href)) info.source = 'WEB-DL'
 
-    info.providerEmoji = '🟡'
+    info.providerEmoji = '🎬'
     info.providerName = 'ZardFilm'
 
     const label = formatStreamLabel(info)
@@ -358,12 +354,13 @@ export function parseDetailStreams(html) {
     })
   }
 
-  streams.sort(
-    (a, b) =>
-      a.priority - b.priority ||
-      String(b.quality).localeCompare(String(a.quality)) ||
-      (a.episode || 0) - (b.episode || 0),
-  )
+  streams.sort((a, b) => {
+    const qa = qualityRank(a.quality)
+    const qb = qualityRank(b.quality)
+    if (qb !== qa) return qb - qa
+    if (a.priority !== b.priority) return a.priority - b.priority
+    return (a.episode || 0) - (b.episode || 0)
+  })
   return streams
 }
 
@@ -389,6 +386,17 @@ export function buildSeriesVideos(episodes) {
       streams: ep.streams || [],
     }))
     .sort((a, b) => a.season - b.season || a.episode - b.episode)
+}
+
+function qualityRank(q) {
+  const s = String(q || '')
+  if (/2160|4K/i.test(s)) return 4000
+  if (/1080/i.test(s)) return 1080
+  if (/720/i.test(s)) return 720
+  if (/480/i.test(s)) return 480
+  if (/360/i.test(s)) return 360
+  const n = parseInt(s.replace(/\D/g, ''), 10)
+  return Number.isFinite(n) ? n : 0
 }
 
 function streamPriority(url) {
