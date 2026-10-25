@@ -5,7 +5,7 @@
 import { movieGenreNames, seriesGenreNames } from '../../providers/f2media/genres.js'
 
 /** Providers that already ship dedicated browse catalogs (no generic _movies/_series). */
-const BROWSE_ONLY_KEYS = new Set(['f2media', 'cinamatic', 'aslmoviez', 'avamovie', 'digimovie'])
+const BROWSE_ONLY_KEYS = new Set(['f2media', 'cinamatic', 'aslmoviez', 'avamovie', 'digimovie', 'zardfilm'])
 
 /** Claim token from stremio-addons.net (issuer + signature). */
 const STREMIO_ADDONS_CONFIG = {
