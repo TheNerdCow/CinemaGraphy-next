@@ -1,6 +1,7 @@
 /**
  * ZardFilm HTML parsers — listing cards, detail meta, download streams.
  * Prefer direct media hosts; skip online-play; label like other providers.
+ * Catalog lists come from .zaf-grid / #zaf-server only (newest updates), not trend rails.
  */
 
 import {
@@ -99,8 +100,29 @@ function gapQuality(n) {
   return map[String(n)] || null
 }
 
+/** Main catalog grid only (newest updates). Not trend/carousel rails. */
+function extractArchiveGrid(html) {
+  const s = String(html || '')
+  // Preferred: #zaf-server .zaf-grid
+  let idx = s.search(/id=["']zaf-server["']/i)
+  if (idx < 0) idx = s.search(/class=["'][^"']*\bzaf-list\b[^"']*["']/i)
+  if (idx < 0) idx = s.search(/class=["'][^"']*\bzaf-grid\b[^"']*["']/i)
+  if (idx >= 0) {
+    const tail = s.slice(idx)
+    const endM = tail.search(/class=["'][^"']*(?:pagination|nav-links|zard-footer|site-footer)[^"']*["']|rel=["']next["']/i)
+    const chunk = endM > 0 ? tail.slice(0, endM) : tail.slice(0, 120000)
+    if (/<article[^>]*class="[^"]*\bzc\b/i.test(chunk)) return chunk
+  }
+  // Fallback: strip known trend wrappers
+  return s
+    .replace(/<ol[^>]*class="[^"]*zn-rank[^"]*"[^>]*>[\s\S]*?<\/ol>/gi, '')
+    .replace(/<ol[^>]*class="[^"]*zn-rail[^"]*"[^>]*>[\s\S]*?<\/ol>/gi, '')
+    .replace(/<div[^>]*class="[^"]*zaf-rails[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
+    .replace(/<div[^>]*class="[^"]*zrl-track[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
+}
+
 /**
- * Listing: only /movie/{slug}/ cards from the main grid (article.zc).
+ * Listing: only /movie/{slug}/ cards from the main archive grid (article.zc).
  * Prefer English title (zc-en) + year; series via zc--series / kind tag.
  * @param {'movie'|'series'|null} forceType
  */
@@ -109,9 +131,13 @@ export function parseListingHtml(html, baseUrl, forceType = null) {
   const results = []
   const seen = new Set()
 
+  // Prefer main archive grid (#zaf-server / .zaf-grid) = تازه‌ترین عناوین
+  // Skip trend rails: .zrl-track, .zn-rank, .zn-rail, .zaf-rails
+  let scope = extractArchiveGrid(html)
+
   const articleRe = /<article[^>]*class="[^"]*\bzc\b[^"]*"[^>]*>([\s\S]*?)<\/article>/gi
   let m
-  while ((m = articleRe.exec(html)) !== null) {
+  while ((m = articleRe.exec(scope)) !== null) {
     const block = m[0]
     // only real title pages under /movie/ — skip /news/ and other sections
     const hrefM = block.match(/href=["']((?:https?:\/\/[^"']+)?\/movie\/[^"'#?]+)["']/i)
@@ -164,7 +190,7 @@ export function parseListingHtml(html, baseUrl, forceType = null) {
   // Fallback: any /movie/ anchors if article parse found nothing
   if (!results.length) {
     const linkRe = /href=["']((?:https?:\/\/[^"']+)?\/movie\/[^"'#?]+)["'][^>]*>/gi
-    while ((m = linkRe.exec(html)) !== null) {
+    while ((m = linkRe.exec(scope)) !== null) {
       const abs = resolveUrl(base, m[1])
       if (!abs) continue
       let pagePath
@@ -174,7 +200,7 @@ export function parseListingHtml(html, baseUrl, forceType = null) {
         continue
       }
       if (!pagePath.startsWith('movie/') || seen.has(pagePath)) continue
-      const ctx = html.slice(Math.max(0, m.index - 80), m.index + 400)
+      const ctx = scope.slice(Math.max(0, m.index - 80), m.index + 400)
       const en = ctx.match(/class="zc-en"[^>]*>[\s\S]*?<span>([^<]+)<\/span>/i)
       const title = en ? en[1].trim() : cleanTitle(match1(ctx, /alt=["']([^"']+)["']/i) || pagePath.split('/').pop())
       if (!title || title.length < 2) continue
@@ -239,7 +265,6 @@ export function parseDetailMeta(html, baseUrl, pagePath) {
 export function parseDetailStreams(html) {
   const streams = []
   const seen = new Set()
-  // page-level audio hint
   const pageAudio = /دوبله(?:ٔ|\s)?فارسی/i.test(html)
     ? 'dub'
     : /زیرنویس(?:\s+چسبیده)?(?:\s+فارسی)?/i.test(html)
@@ -254,7 +279,6 @@ export function parseDetailStreams(html) {
     const text = stripTags(m[2])
     const ctx = html.slice(Math.max(0, m.index - 220), m.index + 280)
 
-    // skip online play / streaming players
     if (/پخش\s*آنلاین/i.test(text) || /gapfilm\.ir\/stream\//i.test(href)) continue
     if (/upera\.tv/i.test(href)) continue
 
@@ -285,7 +309,6 @@ export function parseDetailStreams(html) {
       episode = num(match1(text, /قسمت\s*(\d+)/))
     }
 
-    // quality: button text > URL filename > gapfilm quality=N > _1080. patterns
     let quality =
       extractQuality(text) ||
       extractQuality(href) ||
@@ -311,7 +334,6 @@ export function parseDetailStreams(html) {
       info.encoder = extractEncoderFromText(href) || extractEncoderFromText(text) || 'ZardFilm'
     }
     if (!info.size) info.size = extractSizeFromText(text + ' ' + ctx)
-    // default source for ZF encodes
     if (!info.source && /\.ZF\.|\/ZF\./i.test(href)) info.source = 'WEB-DL'
 
     info.providerEmoji = '🟡'
