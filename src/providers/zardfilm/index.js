@@ -26,6 +26,7 @@ import {
   getCatalogById,
   toManifestCatalogs,
   catalogListUrl,
+  genrePath,
   ZF_CATALOGS,
 } from './catalogs.js'
 
@@ -160,6 +161,32 @@ export function createZardFilmProvider(deps = {}) {
         return mapped
       } catch (err) {
         logger.warn?.('zardfilm browse failed', { message: err.message, catalogId })
+        return []
+      }
+    },
+
+    async browseGenre(type, genre, ctx = {}) {
+      const g = String(genre || '').trim()
+      const path = genrePath(g)
+      if (!path) {
+        return this.search(g, ctx)
+      }
+      const skip = Number(ctx.skip) || 0
+      const page = Math.floor(skip / PAGE_SIZE) + 1
+      const forceType = type === 'series' || type === 'movie' ? type : null
+      const cacheKey = `zf-genre:${path}:${forceType || 'any'}:${page}`
+      const hit = cache.get(cacheKey)
+      if (Array.isArray(hit) && hit.length) return hit
+      try {
+        const url = catalogListUrl(baseUrl, path, page)
+        logger.info?.('zardfilm genre', { genre: g, page, url })
+        const html = await fetchHtml(url)
+        const items = parseListingHtml(html, baseUrl, forceType)
+        const mapped = mapItems(items)
+        cache.set(cacheKey, mapped, mapped.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
+        return mapped
+      } catch (err) {
+        logger.warn?.('zardfilm genre failed', { message: err.message, genre: g })
         return []
       }
     },

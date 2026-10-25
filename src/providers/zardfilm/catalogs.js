@@ -2,6 +2,30 @@
 
 /** @typedef {{ id: string, type: 'movie'|'series', nameFa: string, path: string }} ZfCatalog */
 
+/** Genre label (fa) → site path under /genre/… or absolute path */
+export const ZF_GENRE_PATHS = {
+  'درام': '/genre/drama1',
+  'هیجانی': '/genre/' + encodeURIComponent('هیجانی'),
+  'اکشن': '/genre/action',
+  'کمدی': '/genre/comedy',
+  'جنایی': '/genre/crime',
+  'معمایی': '/genre/puzzle',
+  'ترسناک': '/genre/scary',
+  'فانتزی': '/genre/fantasy',
+  'خانوادگی': '/genre/family',
+  'علمی تخیلی': '/genre/fiction',
+  'عاشقانه': '/genre/romantic',
+  'ماجراجویی': '/genre/adventure',
+  'تاریخی': '/genre/' + encodeURIComponent('تاریخی'),
+  'اجتماعی': '/genre/social',
+  'هندی': '/genre/hindi',
+  'مستند': '/genre/' + encodeURIComponent('مستند'),
+  'جنگی': '/genre/' + encodeURIComponent('جنگی'),
+  'انیمیشن': '/animation',
+}
+
+export const ZF_GENRES = Object.keys(ZF_GENRE_PATHS)
+
 /** @type {ZfCatalog[]} */
 export const ZF_CATALOGS = [
   {
@@ -64,22 +88,40 @@ export function getCatalogById(id) {
   return ZF_CATALOGS.find((c) => c.id === id) || null
 }
 
-export function toManifestCatalogs() {
-  return ZF_CATALOGS.map((c) => ({
-    id: c.id,
-    type: c.type,
-    name: c.nameFa,
-    extra: [
-      { name: 'search', isRequired: false },
-      { name: 'skip', isRequired: false },
-    ],
-  }))
+export function genrePath(genre) {
+  const g = String(genre || '').trim()
+  return ZF_GENRE_PATHS[g] || null
 }
 
-/** /path/, /path/page/2/ */
+export function toManifestCatalogs() {
+  return ZF_CATALOGS.map((c) => {
+    const extra = [
+      { name: 'search', isRequired: false },
+      { name: 'skip', isRequired: false },
+    ]
+    // genre filter on main film/series rails (newest-on-site default order)
+    if (
+      c.id === 'zardfilm_foreign_sub' ||
+      c.id === 'zardfilm_dubbed' ||
+      c.id === 'zardfilm_series_foreign' ||
+      c.id === 'zardfilm_series_dubbed'
+    ) {
+      extra.unshift({ name: 'genre', options: ZF_GENRES, isRequired: false })
+    }
+    return {
+      id: c.id,
+      type: c.type,
+      name: c.nameFa,
+      extra,
+    }
+  })
+}
+
+/** /path/, /path/page/2/ — site default order is newest */
 export function catalogListUrl(base, catalog, page = 1) {
   const root = String(base).replace(/\/+$/, '')
-  let path = catalog.path.startsWith('/') ? catalog.path : `/${catalog.path}`
+  let path = typeof catalog === 'string' ? catalog : catalog.path
+  path = path.startsWith('/') ? path : `/${path}`
   path = path.replace(/\/+$/, '')
   if (page <= 1) return root + path + '/'
   return `${root}${path}/page/${page}/`
