@@ -48,12 +48,19 @@ function cleanTitle(raw) {
   let t = stripTags(raw)
   t = t
     .replace(/^دانلود\s+(?:و\s+تماشای\s+)?(?:فیلم|سریال|انیمیشن|انیمه|کارتون)\s+/i, '')
+    .replace(/\s*بدون\s*سانسور\s*/gi, ' ')
+    .replace(/\s*با\s*لینک\s*مستقیم\s*/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+  // Drop trailing Persian marketing when an English title exists
+  if (/[A-Za-z]{3,}/.test(t) && /[\u0600-\u06FF]/.test(t)) {
+    const cut = t.replace(/[\u0600-\u06FF\u064B-\u065F].*$/u, '').trim()
+    if (cut.length >= 4) t = cut
+  }
+  t = t.replace(/\s+(?:19|20)\d{2}\s*$/, '').trim()
   return t
 }
 
-/** Decode %XX in paths/titles (e.g. movie/%d8%b3...) */
 function tryDecode(s) {
   try {
     return decodeURIComponent(String(s || ''))
@@ -62,30 +69,29 @@ function tryDecode(s) {
   }
 }
 
-/**
- * Iranian catalog noise: Persian-only titles, encoded-Persian slugs,
- * Iranian calendar years (13xx/14xx) without Latin title.
- */
 function isLikelyIranian(title, pagePath, block) {
   const t = String(title || '').trim()
-  const path = tryDecode(String(pagePath || ''))
+  const path = tryDecode(String(pagePath || '')).toLowerCase()
+  const slug = path.split('/').pop() || ''
   const blob = tryDecode(String(block || ''))
 
-  // Explicit foreign markers → keep
-  if (/\b(202[0-9]|201[0-9]|200[0-9]|199[0-9])\b/.test(t) && /[A-Za-z]{3,}/.test(t)) return false
-  if (/[A-Za-z]{3,}/.test(t) && !/[\u0600-\u06FF]{3,}/.test(t)) return false
-
-  // Path still percent-encoded Persian or decoded Persian slug
+  if (/[A-Za-z]{3,}/.test(t) && /\b(19|20)\d{2}\b/.test(t) && !/[\u0600-\u06FF]{3,}/.test(t)) return false
   if (/%d[89a-f]{2}/i.test(pagePath || '')) return true
   if (/[\u0600-\u06FF]{2,}/.test(path) && !/[A-Za-z]{3,}/.test(path)) return true
 
-  // Title almost only Persian (no Latin word)
   const hasPersian = /[\u0600-\u06FF]{2,}/.test(t)
   const hasLatin = /[A-Za-z]{3,}/.test(t)
   if (hasPersian && !hasLatin) return true
+  if (/\b14[0-9]{2}\b/.test(blob) && (!hasLatin || hasPersian)) return true
 
-  // Iranian calendar year badges common on IR titles
-  if (/\b14[0-9]{2}\b/.test(blob) && hasPersian && !hasLatin) return true
+  if (/\b(nim-?rokh|shah-?gol|kouri|kori|eteraf|mikonam|ostekhan|sooz|safineh|nejat|bi-?dar|cafe-?soltan|escort|yil|yal|dijam|bist-?o-?yek|21-series|pardes|aghagh)\b/i.test(slug + ' ' + t)) {
+    if (/uyanis-buyuk|selcuklu|genghis|napoleon/i.test(slug + t)) return false
+    if (hasLatin && /\b(19|20)\d{2}\b/.test(t) && !hasPersian) return false
+    return true
+  }
+
+  // title is only kebab slug (broken card / missing poster title)
+  if (/^[a-z0-9]+(?:-[a-z0-9]+){1,12}$/i.test(t) && !/\b(the|of|and|movie|series|season|episode)\b/i.test(t)) return true
 
   return false
 }
@@ -201,6 +207,7 @@ export function parseListingHtml(html, baseUrl, forceType = null) {
     const decodedPath = tryDecode(pagePath).replace(/^\/+/, '').replace(/\/+$/, '')
     const finalTitle = cleanTitle(tryDecode(title))
     if (isLikelyIranian(finalTitle, pagePath, block)) continue
+    if (!poster && /^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(finalTitle)) continue
 
     seen.add(pagePath)
     seen.add(decodedPath)
@@ -234,6 +241,8 @@ export function parseListingHtml(html, baseUrl, forceType = null) {
       const finalTitle = cleanTitle(tryDecode(title))
       if (isLikelyIranian(finalTitle, pagePath, ctx)) continue
       const decodedPath = tryDecode(pagePath).replace(/^\/+/, '').replace(/\/+$/, '')
+      const img = absPoster(base, match1(ctx, /src=["']([^"']+\.(?:webp|jpg|jpeg|png)[^"']*)["']/i))
+      if (!img && /^[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(finalTitle)) continue
       seen.add(pagePath)
       seen.add(decodedPath)
       results.push({
@@ -242,7 +251,7 @@ export function parseListingHtml(html, baseUrl, forceType = null) {
         type: forceType || (/series|سریال/i.test(pagePath + ctx) ? 'series' : 'movie'),
         title: finalTitle,
         year: extractYear(ctx),
-        poster: absPoster(base, match1(ctx, /src=["']([^"']+\.(?:webp|jpg|jpeg|png)[^"']*)["']/i)),
+        poster: img,
         imdb: null,
       })
     }
@@ -302,12 +311,14 @@ export function parseDetailStreams(html) {
     const ctx = html.slice(Math.max(0, m.index - 220), m.index + 280)
 
     if (/پخش\s*آنلاین/i.test(text) || /gapfilm\.ir\/stream\//i.test(href)) continue
-    if (/upera\.tv/i.test(href)) continue
+    // allow upera direct mp4/mkv downloads; skip other upera player urls
+    if (/upera\.tv/i.test(href) && !/\.(mp4|mkv)(\?|$)/i.test(href)) continue
 
     const isMedia =
       /\.(mkv|mp4)(\?|$)/i.test(href) ||
       /gapfilm\.ir\/download\//i.test(href) ||
-      /tarahipro\.ir/i.test(href)
+      /tarahipro\.ir/i.test(href) ||
+      /upera\.tv\/[^\s"']+\.(mp4|mkv)/i.test(href)
 
     if (!isMedia) continue
 
@@ -336,7 +347,8 @@ export function parseDetailStreams(html) {
       extractQuality(href) ||
       extractQuality(ctx) ||
       gapQuality(match1(href, /[?&]quality=(\d+)/i)) ||
-      match1(href, /[_.-](2160|1080|720|480|360)(?:p)?[_.-]/i)
+      match1(href, /[_.-](2160|1080|720|480|360)(?:p)?[_.-]/i) ||
+      match1(href, /-(?:HQ_)?(2160|1080|720|480|360)(?:\.mp4|\.mkv)/i)
 
     if (quality && !/p$/i.test(quality) && /^\d+$/.test(quality)) {
       quality = quality + 'p'
@@ -359,6 +371,9 @@ export function parseDetailStreams(html) {
         const h = hm[0]
         last = /دوبله/i.test(h) && !/زیرنویس/i.test(h) ? 'dub' : 'sub'
       }
+      // upera path: -11- = hardsub family, -0- = dub family on many pages
+      if (!last && /upera\.tv\/\d+-11-/i.test(href)) last = 'sub'
+      if (!last && /upera\.tv\/\d+-0-/i.test(href) && /دوبله/i.test(text + above.slice(-400))) last = 'dub'
       if (last) info.audio = last
       else if (/زیرنویس/i.test(text)) info.audio = 'sub'
       else if (/دوبله/i.test(text)) info.audio = 'dub'
@@ -368,7 +383,7 @@ export function parseDetailStreams(html) {
       info.encoder = extractEncoderFromText(href) || extractEncoderFromText(text) || 'ZardFilm'
     }
     if (!info.size) info.size = extractSizeFromText(text + ' ' + ctx)
-    if (!info.source && /\.ZF\.|\/ZF\./i.test(href)) info.source = 'WEB-DL'
+    if (!info.source && (/\.ZF\.|\/ZF\./i.test(href) || /upera\.tv/i.test(href))) info.source = 'WEB-DL'
 
     info.providerEmoji = '🎬'
     info.providerName = 'ZardFilm'
@@ -439,7 +454,8 @@ function qualityRank(q) {
 
 function streamPriority(url) {
   const u = url.toLowerCase()
-  if (/\.(mkv|mp4)(\?|$)/i.test(u) && !/gapfilm/i.test(u)) return 0
+  if (/\.(mkv|mp4)(\?|$)/i.test(u) && !/gapfilm/i.test(u) && !/upera/i.test(u)) return 0
+  if (/upera\.tv/i.test(u) && /\.(mkv|mp4)/i.test(u)) return 1
   if (/tarahipro/i.test(u)) return 1
   if (/gapfilm\.ir\/download/i.test(u)) return 2
   return 5
