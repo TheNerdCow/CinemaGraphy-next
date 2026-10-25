@@ -46,9 +46,7 @@ export function createZardFilmProvider(deps = {}) {
   async function fetchHtml(url) {
     const res = await http.get(url, {
       timeoutMs: 20_000,
-      headers: {
-        Referer: baseUrl + '/',
-      },
+      headers: { Referer: baseUrl + '/' },
     })
     if (!res?.ok) {
       const err = new Error(`HTTP ${res?.status || 0}`)
@@ -71,10 +69,7 @@ export function createZardFilmProvider(deps = {}) {
     if (hit !== undefined) return { ...out, ...hit }
     try {
       if (imdbHint) {
-        const meta = await withTimeout(
-          cinemeta.byImdb(imdbHint, type === 'series' ? 'series' : 'movie'),
-          4500,
-        )
+        const meta = await withTimeout(cinemeta.byImdb(imdbHint, type === 'series' ? 'series' : 'movie'), 4500)
         if (meta) {
           out.description = meta.description
           out.genres = meta.genres
@@ -143,7 +138,6 @@ export function createZardFilmProvider(deps = {}) {
       }
     },
 
-    /** Stremio catalog id → listing. Server calls browse(id), not getCatalog. */
     async browse(catalogId, ctx = {}) {
       const cat = getCatalogById(catalogId)
       if (!cat) {
@@ -189,7 +183,6 @@ export function createZardFilmProvider(deps = {}) {
         const episodes = forceType === 'series' ? groupEpisodeStreams(streams) : []
         const videos = forceType === 'series' ? buildSeriesVideos(episodes) : []
         const img = await lookupImages(meta.title, meta.year, forceType, meta.imdb)
-
         const detail = {
           internalId: makeInternalId('zardfilm', encodePageId(pagePath)),
           type: forceType,
@@ -207,18 +200,8 @@ export function createZardFilmProvider(deps = {}) {
           providerKey: 'zardfilm',
           externalRefs: { pagePath, imdb: img.imdb || meta.imdb },
         }
-        cache.set(
-          cacheKey,
-          detail,
-          streams.length || videos.length ? CACHE_DETAIL_MS : 60_000,
-        )
-        logger.info?.('zardfilm detail', {
-          pagePath,
-          type: detail.type,
-          streams: streams.length,
-          videos: videos.length,
-          imdb: detail.imdb,
-        })
+        cache.set(cacheKey, detail, streams.length || videos.length ? CACHE_DETAIL_MS : 60_000)
+        logger.info?.('zardfilm detail', { pagePath, type: detail.type, streams: streams.length, videos: videos.length, imdb: detail.imdb })
         return detail
       } catch (err) {
         logger.warn?.('zardfilm detail failed', { message: err.message, itemId })
@@ -230,25 +213,15 @@ export function createZardFilmProvider(deps = {}) {
       if (!detail) return []
       const season = videoCtx?.season
       const episode = videoCtx?.episode
-
       if (detail.type === 'series' && season != null && episode != null) {
-        const ep = (detail.episodes || []).find(
-          (e) => Number(e.season) === Number(season) && Number(e.episode) === Number(episode),
-        )
+        const ep = (detail.episodes || []).find((e) => Number(e.season) === Number(season) && Number(e.episode) === Number(episode))
         if (ep?.streams?.length) return ep.streams.map(toStream)
-        const tagged = (detail.streams || []).filter(
-          (s) =>
-            Number(s.season || 1) === Number(season) &&
-            Number(s.episode) === Number(episode),
-        )
+        const tagged = (detail.streams || []).filter((s) => Number(s.season || 1) === Number(season) && Number(s.episode) === Number(episode))
         if (tagged.length) return tagged.map(toStream)
         return []
       }
-
       if (!detail.streams?.length) return []
-      if (detail.type === 'series') {
-        return detail.streams.filter((s) => !s.episode).map(toStream)
-      }
+      if (detail.type === 'series') return detail.streams.filter((s) => !s.episode).map(toStream)
       return detail.streams.map(toStream)
     },
 
@@ -260,10 +233,11 @@ export function createZardFilmProvider(deps = {}) {
 }
 
 function toStream(s) {
+  const badge = s.badge || s.name || 'HD'
   return {
     url: s.url,
-    name: s.badge || s.name || 'HD',
-    title: s.label || s.title,
+    name: `ZardFilm ${badge}`,
+    title: s.label || s.title || badge,
     quality: s.quality,
     providerKey: 'zardfilm',
   }
@@ -283,10 +257,7 @@ function mapItems(parsed) {
 }
 
 function withTimeout(promise, ms) {
-  return Promise.race([
-    promise,
-    new Promise((resolve) => setTimeout(() => resolve(null), ms)),
-  ])
+  return Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(null), ms))])
 }
 
 export default createZardFilmProvider
