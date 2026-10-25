@@ -3,6 +3,7 @@
  * Prefer direct media hosts; skip online-play; label like other providers.
  * Catalog lists come from .zaf-grid / #zaf-server only (newest updates), not trend rails.
  * Iranian movie/series titles are filtered out of listings.
+ * WP REST search JSON supported for streams-only resolve.
  */
 
 import {
@@ -52,7 +53,6 @@ function cleanTitle(raw) {
     .replace(/\s*با\s*لینک\s*مستقیم\s*/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-  // Drop trailing Persian marketing when an English title exists
   if (/[A-Za-z]{3,}/.test(t) && /[\u0600-\u06FF]/.test(t)) {
     const cut = t.replace(/[\u0600-\u06FF\u064B-\u065F].*$/u, '').trim()
     if (cut.length >= 4) t = cut
@@ -90,7 +90,6 @@ function isLikelyIranian(title, pagePath, block) {
     return true
   }
 
-  // title is only kebab slug (broken card / missing poster title)
   if (/^[a-z0-9]+(?:-[a-z0-9]+){1,12}$/i.test(t) && !/\b(the|of|and|movie|series|season|episode)\b/i.test(t)) return true
 
   return false
@@ -264,6 +263,45 @@ export function parseSearchHtml(html, baseUrl) {
   return parseListingHtml(html, baseUrl, null)
 }
 
+/** WP REST /wp-json/wp/v2/search or posts — used in streams-only resolve. */
+export function parseWpSearchJson(rows, baseUrl = 'https://zardfilm.in') {
+  const base = String(baseUrl || 'https://zardfilm.in').replace(/\/+$/, '')
+  const results = []
+  const seen = new Set()
+  for (const row of rows || []) {
+    const url = String(row?.url || row?.link || '')
+    if (!url || !/\/movie\//i.test(url)) continue
+    let pagePath
+    try {
+      pagePath = new URL(url, base).pathname.replace(/^\/+/, '').replace(/\/+$/, '')
+    } catch {
+      continue
+    }
+    if (!pagePath.startsWith('movie/') || seen.has(pagePath)) continue
+    const rawTitle =
+      typeof row?.title === 'object' && row?.title != null
+        ? String(row.title.rendered || row.title.raw || '')
+        : String(row?.title || row?.name || '')
+    const title = cleanTitle(tryDecode(rawTitle))
+    if (!title || title.length < 2) continue
+    if (isLikelyIranian(title, pagePath, rawTitle)) continue
+    const isSeries =
+      /سریال|series|season|anime|انیمه/i.test(rawTitle + ' ' + pagePath) ||
+      /-series\b/i.test(pagePath)
+    seen.add(pagePath)
+    results.push({
+      itemId: encodePageId(pagePath),
+      pagePath,
+      type: isSeries ? 'series' : 'movie',
+      title,
+      year: extractYear(rawTitle) || extractYear(title),
+      poster: null,
+      imdb: null,
+    })
+  }
+  return results
+}
+
 export function parseDetailMeta(html, baseUrl, pagePath) {
   const base = String(baseUrl || 'https://zardfilm.in').replace(/\/+$/, '')
   const title =
@@ -311,7 +349,6 @@ export function parseDetailStreams(html) {
     const ctx = html.slice(Math.max(0, m.index - 220), m.index + 280)
 
     if (/پخش\s*آنلاین/i.test(text) || /gapfilm\.ir\/stream\//i.test(href)) continue
-    // allow upera direct mp4/mkv downloads; skip other upera player urls
     if (/upera\.tv/i.test(href) && !/\.(mp4|mkv)(\?|$)/i.test(href)) continue
 
     const isMedia =
@@ -371,7 +408,6 @@ export function parseDetailStreams(html) {
         const h = hm[0]
         last = /دوبله/i.test(h) && !/زیرنویس/i.test(h) ? 'dub' : 'sub'
       }
-      // upera path: -11- = hardsub family, -0- = dub family on many pages
       if (!last && /upera\.tv\/\d+-11-/i.test(href)) last = 'sub'
       if (!last && /upera\.tv\/\d+-0-/i.test(href) && /دوبله/i.test(text + above.slice(-400))) last = 'dub'
       if (last) info.audio = last
