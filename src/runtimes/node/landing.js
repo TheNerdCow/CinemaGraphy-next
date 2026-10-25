@@ -1,16 +1,17 @@
 /**
- * Landing page — restored via parts after accidental truncate on GitHub.
+ * CinemaGraphy NEXT landing — base64-restored (full UI + ZardFilm status).
  */
 import { ASSET_BG, ASSET_MARK, ASSET_FAV, ASSET_DIGI_FAV } from './landing-assets.js'
-import { PART0 } from './landing-part-0.js'
-import { PART1 } from './landing-part-1.js'
-import { PART2 } from './landing-part-2.js'
-import { PART3 } from './landing-part-3.js'
+import { B0 } from './landing-b64-0.js'
+import { B1 } from './landing-b64-1.js'
+import { B2 } from './landing-b64-2.js'
+import { B3 } from './landing-b64-3.js'
+import { B4 } from './landing-b64-4.js'
 
-const FULL = PART0 + PART1 + PART2 + PART3
+const SRC = Buffer.from(B0 + B1 + B2 + B3 + B4, 'base64').toString('utf8')
 
 export function renderLanding(opts = {}) {
-  const stripped = FULL
+  const stripped = SRC
     .replace(/^import\s+[\s\S]*?from\s+['"][^'"]+['"];?\s*/m, '')
     .replace(/export\s+function\s+renderLanding/, 'function renderLanding')
   const runner = new Function(
