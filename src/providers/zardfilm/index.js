@@ -120,21 +120,22 @@ export function createZardFilmProvider(deps = {}) {
       return true
     },
 
-    async search(query, type, opts = {}) {
+    async search(query, ctx = {}) {
       const q = String(query || '').trim()
       if (!q) return []
-      const cacheKey = `zf-search:${type || 'all'}:${q}`
+      const skip = Number(ctx.skip) || 0
+      const page = Math.floor(skip / PAGE_SIZE) + 1
+      const cacheKey = `zf-search:${q.toLowerCase()}:${page}`
       const hit = cache.get(cacheKey)
-      if (hit !== undefined) return hit
+      if (Array.isArray(hit) && hit.length) return hit
       try {
+        if (page > 1) return []
         const url = `${baseUrl}/?s=${encodeURIComponent(q)}`
         const html = await fetchHtml(url)
-        let items = parseSearchHtml(html, baseUrl)
-        if (type === 'movie' || type === 'series') {
-          items = items.filter((i) => i.type === type)
-        }
+        const items = parseSearchHtml(html, baseUrl)
         const mapped = mapItems(items)
         cache.set(cacheKey, mapped, mapped.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
+        logger.info?.('zardfilm search', { q, count: mapped.length })
         return mapped
       } catch (err) {
         logger.warn?.('zardfilm search failed', { message: err.message, q })
@@ -142,26 +143,35 @@ export function createZardFilmProvider(deps = {}) {
       }
     },
 
-    async getCatalog(catalogId, opts = {}) {
+    /** Stremio catalog id → listing. Server calls browse(id), not getCatalog. */
+    async browse(catalogId, ctx = {}) {
       const cat = getCatalogById(catalogId)
-      if (!cat) return []
-      const skip = Number(opts.skip || 0) || 0
+      if (!cat) {
+        logger.warn?.('zardfilm unknown catalog', { catalogId })
+        return []
+      }
+      const skip = Number(ctx.skip) || 0
       const page = Math.floor(skip / PAGE_SIZE) + 1
-      const cacheKey = `zf-cat:${catalogId}:${page}`
+      const cacheKey = `zf-browse:${catalogId}:${page}`
       const hit = cache.get(cacheKey)
-      if (hit !== undefined) return hit
+      if (Array.isArray(hit) && hit.length) return hit
       try {
         const url = catalogListUrl(baseUrl, cat, page)
+        logger.info?.('zardfilm browse', { catalogId, page, url })
         const html = await fetchHtml(url)
         const items = parseListingHtml(html, baseUrl, cat.type)
         const mapped = mapItems(items)
         cache.set(cacheKey, mapped, mapped.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
-        logger.info?.('zardfilm catalog', { catalogId, page, count: mapped.length })
+        logger.info?.('zardfilm browse done', { catalogId, page, count: mapped.length })
         return mapped
       } catch (err) {
-        logger.warn?.('zardfilm catalog failed', { message: err.message, catalogId })
+        logger.warn?.('zardfilm browse failed', { message: err.message, catalogId })
         return []
       }
+    },
+
+    async getCatalog(catalogId, opts = {}) {
+      return this.browse(catalogId, opts)
     },
 
     async getDetail(itemId, type, opts = {}) {
