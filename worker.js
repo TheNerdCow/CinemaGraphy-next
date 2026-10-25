@@ -15,6 +15,7 @@ import { createCinamaticProvider } from './src/providers/cinamatic/index.js'
 import { createAslMoviezProvider } from './src/providers/aslmoviez/index.js'
 import { createAvaMovieProvider } from './src/providers/avamovie/index.js'
 import { createDigiMovieProvider } from './src/providers/digimovie/index.js'
+import { createZardFilmProvider } from './src/providers/zardfilm/index.js'
 import { fromStremioProviderId, toStremioProviderId } from './src/core/ids/namespace.js'
 import { renderLanding } from './src/runtimes/node/landing.js'
 import { ASSET_BG, ASSET_MARK, ASSET_DIGI_FAV } from './src/runtimes/node/landing-assets.js'
@@ -22,13 +23,14 @@ import { ASSET_BG, ASSET_MARK, ASSET_DIGI_FAV } from './src/runtimes/node/landin
 const log = createLogger('info')
 const VERSION = '0.6.6'
 
-const FREE_PROVIDERS = ['f2media', 'cinamatic', 'aslmoviez']
-const ALL_PROVIDER_KEYS = [...FREE_PROVIDERS, 'avamovie', 'digimovie']
+const FREE_PROVIDERS = ['f2media', 'aslmoviez', 'zardfilm']
+const ALL_PROVIDER_KEYS = ['f2media', 'aslmoviez', 'zardfilm', 'cinamatic', 'avamovie', 'digimovie']
 
 registerProvider(stubExampleProvider)
 registerProvider(createF2MediaProvider({ logger: log }))
 registerProvider(createCinamaticProvider({ logger: log }))
 registerProvider(createAslMoviezProvider({ logger: log }))
+registerProvider(createZardFilmProvider({ logger: log }))
 registerProvider(createAvaMovieProvider({ logger: log }))
 registerProvider(createDigiMovieProvider({ logger: log }))
 
