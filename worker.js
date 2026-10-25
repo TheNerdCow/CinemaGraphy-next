@@ -83,6 +83,7 @@ function getBaseServerConfig(c) {
     f2media: { enabled: true, baseUrl: 'https://www.myf2ms.top' },
     cinamatic: { enabled: true, baseUrl: 'https://cinamatic.top' },
     aslmoviez: { enabled: true, baseUrl: 'https://aslmoviez.com' },
+    zardfilm: { enabled: true, baseUrl: 'https://zardfilm.in' },
     avamovie: { enabled: false, baseUrl: 'https://avadel.top' },
     digimovie: { enabled: false, baseUrl: 'https://digimoviez53.top' },
   }
@@ -237,6 +238,7 @@ app.get('/api/sources-status', async (c) => {
     f2media: cfg.providers?.f2media?.baseUrl || 'https://www.myf2ms.top',
     cinamatic: cfg.providers?.cinamatic?.baseUrl || 'https://cinamatic.top',
     aslmoviez: cfg.providers?.aslmoviez?.baseUrl || 'https://aslmoviez.com',
+    zardfilm: cfg.providers?.zardfilm?.baseUrl || 'https://zardfilm.in',
     avamovie: cfg.providers?.avamovie?.baseUrl || 'https://avadel.top',
     digimovie: cfg.providers?.digimovie?.baseUrl || 'https://digimoviez53.top',
   }
@@ -318,7 +320,6 @@ const manifestHandler = (c) => {
     }))
     const manifest = buildStremioManifest(cfg, providers)
 
-    // اصلاح کامل انواع کاتالوگ‌ها و پاکسازی extraRequired برای نمایش تضمینی در صفحه اصلی استریمیو
     manifest.types = ['movie', 'series', 'tv', 'anime']
     if (Array.isArray(manifest.catalogs)) {
       manifest.catalogs = manifest.catalogs.map((cat) => {
