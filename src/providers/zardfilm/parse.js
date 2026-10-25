@@ -2,6 +2,7 @@
  * ZardFilm HTML parsers — listing cards, detail meta, download streams.
  * Prefer direct media hosts; skip online-play; label like other providers.
  * Catalog lists come from .zaf-grid / #zaf-server only (newest updates), not trend rails.
+ * Iranian movie/series titles are filtered out of listings.
  */
 
 import {
@@ -52,6 +53,43 @@ function cleanTitle(raw) {
   return t
 }
 
+/** Decode %XX in paths/titles (e.g. movie/%d8%b3...) */
+function tryDecode(s) {
+  try {
+    return decodeURIComponent(String(s || ''))
+  } catch {
+    return String(s || '')
+  }
+}
+
+/**
+ * Iranian catalog noise: Persian-only titles, encoded-Persian slugs,
+ * Iranian calendar years (13xx/14xx) without Latin title.
+ */
+function isLikelyIranian(title, pagePath, block) {
+  const t = String(title || '').trim()
+  const path = tryDecode(String(pagePath || ''))
+  const blob = tryDecode(String(block || ''))
+
+  // Explicit foreign markers → keep
+  if (/\b(202[0-9]|201[0-9]|200[0-9]|199[0-9])\b/.test(t) && /[A-Za-z]{3,}/.test(t)) return false
+  if (/[A-Za-z]{3,}/.test(t) && !/[\u0600-\u06FF]{3,}/.test(t)) return false
+
+  // Path still percent-encoded Persian or decoded Persian slug
+  if (/%d[89a-f]{2}/i.test(pagePath || '')) return true
+  if (/[\u0600-\u06FF]{2,}/.test(path) && !/[A-Za-z]{3,}/.test(path)) return true
+
+  // Title almost only Persian (no Latin word)
+  const hasPersian = /[\u0600-\u06FF]{2,}/.test(t)
+  const hasLatin = /[A-Za-z]{3,}/.test(t)
+  if (hasPersian && !hasLatin) return true
+
+  // Iranian calendar year badges common on IR titles
+  if (/\b14[0-9]{2}\b/.test(blob) && hasPersian && !hasLatin) return true
+
+  return false
+}
+
 function extractYear(text) {
   const m = String(text || '').match(/\b(19|20)\d{2}\b/)
   return m ? Number(m[0]) : null
@@ -94,13 +132,11 @@ function num(v) {
   return Number.isFinite(n) ? n : null
 }
 
-/** gapfilm quality=N → resolution (site buttons: 5=1080, 4=720, 3=480) */
 function gapQuality(n) {
   const map = { 5: '1080p', 4: '720p', 3: '480p', 2: '360p', 6: '2160p' }
   return map[String(n)] || null
 }
 
-/** Main catalog grid only (newest updates). Not trend/carousel rails. */
 function extractArchiveGrid(html) {
   const s = String(html || '')
   let idx = s.search(/id=["']zaf-server["']/i)
@@ -162,13 +198,17 @@ export function parseListingHtml(html, baseUrl, forceType = null) {
       /series|سریال|انیمه/i.test(pagePath)
 
     const type = forceType || (isSeries ? 'series' : 'movie')
+    const decodedPath = tryDecode(pagePath).replace(/^\/+/, '').replace(/\/+$/, '')
+    const finalTitle = cleanTitle(tryDecode(title))
+    if (isLikelyIranian(finalTitle, pagePath, block)) continue
 
     seen.add(pagePath)
+    seen.add(decodedPath)
     results.push({
-      itemId: encodePageId(pagePath),
-      pagePath,
+      itemId: encodePageId(decodedPath.startsWith('movie/') ? decodedPath : pagePath),
+      pagePath: decodedPath.startsWith('movie/') ? decodedPath : pagePath,
       type,
-      title: cleanTitle(title),
+      title: finalTitle,
       year,
       poster,
       imdb: null,
@@ -191,12 +231,16 @@ export function parseListingHtml(html, baseUrl, forceType = null) {
       const en = ctx.match(/class="zc-en"[^>]*>[\s\S]*?<span>([^<]+)<\/span>/i)
       const title = en ? en[1].trim() : cleanTitle(match1(ctx, /alt=["']([^"']+)["']/i) || pagePath.split('/').pop())
       if (!title || title.length < 2) continue
+      const finalTitle = cleanTitle(tryDecode(title))
+      if (isLikelyIranian(finalTitle, pagePath, ctx)) continue
+      const decodedPath = tryDecode(pagePath).replace(/^\/+/, '').replace(/\/+$/, '')
       seen.add(pagePath)
+      seen.add(decodedPath)
       results.push({
-        itemId: encodePageId(pagePath),
-        pagePath,
+        itemId: encodePageId(decodedPath.startsWith('movie/') ? decodedPath : pagePath),
+        pagePath: decodedPath.startsWith('movie/') ? decodedPath : pagePath,
         type: forceType || (/series|سریال/i.test(pagePath + ctx) ? 'series' : 'movie'),
-        title: cleanTitle(title),
+        title: finalTitle,
         year: extractYear(ctx),
         poster: absPoster(base, match1(ctx, /src=["']([^"']+\.(?:webp|jpg|jpeg|png)[^"']*)["']/i)),
         imdb: null,
@@ -216,7 +260,7 @@ export function parseDetailMeta(html, baseUrl, pagePath) {
   const title =
     cleanTitle(match1(html, /property=["']og:title["'][^>]*content=["']([^"']+)["']/i)) ||
     cleanTitle(match1(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i)) ||
-    cleanTitle(pagePath.split('/').pop().replace(/-/g, ' '))
+    cleanTitle(tryDecode(pagePath.split('/').pop()).replace(/-/g, ' '))
 
   const year =
     extractYear(match1(html, /property=["']og:title["'][^>]*content=["']([^"']+)["']/i) || '') ||
@@ -237,7 +281,7 @@ export function parseDetailMeta(html, baseUrl, pagePath) {
     /series/i.test(pagePath)
 
   return {
-    title,
+    title: cleanTitle(tryDecode(title)),
     year,
     poster,
     imdb: imdb || null,
@@ -245,11 +289,6 @@ export function parseDetailMeta(html, baseUrl, pagePath) {
   }
 }
 
-/**
- * Download links only (skip «پخش آنلاین»).
- * Audio from closest section header (زیرنویس چسبیده / دوبله).
- * Sorted 4K → 1080 → 720 → 480.
- */
 export function parseDetailStreams(html) {
   const streams = []
   const seen = new Set()
@@ -307,7 +346,6 @@ export function parseDetailStreams(html) {
     if (!info.quality && quality) info.quality = quality
     if (!info.quality) info.quality = quality || 'HD'
 
-    // URL first, then closest section header above this link
     if (/SoftSub|HardSub|Hard\.Sub|\bSUB\b/i.test(href)) {
       info.audio = 'sub'
     } else if (/\bDubbed\b|\b4Dub\b|Farsi\.Dub/i.test(href)) {
