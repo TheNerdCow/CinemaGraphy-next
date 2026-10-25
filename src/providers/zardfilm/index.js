@@ -2,6 +2,7 @@
  * ZardFilm provider (zardfilm.in) — free, no cookie.
  * Catalogs: foreign / dubbed / animation / anime / foreign series / dubbed / KR / TR / CN.
  * Skips Iranian movie & series catalogs.
+ * Search uses WP REST (+ HTML fallback) so streams-only mode can resolve titles.
  */
 
 import { makeInternalId, toStremioProviderId } from '../../core/ids/namespace.js'
@@ -15,6 +16,7 @@ import {
 import {
   parseListingHtml,
   parseSearchHtml,
+  parseWpSearchJson,
   parseDetailMeta,
   parseDetailStreams,
   groupEpisodeStreams,
@@ -70,7 +72,10 @@ export function createZardFilmProvider(deps = {}) {
     if (hit !== undefined) return { ...out, ...hit }
     try {
       if (imdbHint) {
-        const meta = await withTimeout(cinemeta.byImdb(imdbHint, type === 'series' ? 'series' : 'movie'), 4500)
+        const meta = await withTimeout(
+          cinemeta.byImdb(imdbHint, type === 'series' ? 'series' : 'movie'),
+          4500,
+        )
         if (meta) {
           out.description = meta.description
           out.genres = meta.genres
@@ -125,10 +130,47 @@ export function createZardFilmProvider(deps = {}) {
       const hit = cache.get(cacheKey)
       if (Array.isArray(hit) && hit.length) return hit
       try {
+        // site HTML /?s= is often empty (client-side search only)
         if (page > 1) return []
-        const url = `${baseUrl}/?s=${encodeURIComponent(q)}`
-        const html = await fetchHtml(url)
-        const items = parseSearchHtml(html, baseUrl)
+        let items = []
+        const jsonHeaders = { Accept: 'application/json', Referer: baseUrl + '/' }
+        // 1) WP search endpoint
+        try {
+          const apiUrl = `${baseUrl}/wp-json/wp/v2/search?search=${encodeURIComponent(q)}&per_page=24&subtype=post`
+          const res = await http.get(apiUrl, { timeoutMs: 14_000, headers: jsonHeaders })
+          if (res?.ok) {
+            const rows = await res.json()
+            items = parseWpSearchJson(Array.isArray(rows) ? rows : [], baseUrl)
+          }
+        } catch (apiErr) {
+          logger.warn?.('zardfilm wp search failed', { message: apiErr.message, q })
+        }
+        // 2) WP posts search (often richer than /search)
+        if (!items.length) {
+          try {
+            const postsUrl = `${baseUrl}/wp-json/wp/v2/posts?search=${encodeURIComponent(q)}&per_page=24&_fields=id,link,title,slug`
+            const res = await http.get(postsUrl, { timeoutMs: 14_000, headers: jsonHeaders })
+            if (res?.ok) {
+              const rows = await res.json()
+              const mapped = (Array.isArray(rows) ? rows : []).map((r) => ({
+                url: r.link,
+                title: r.title,
+              }))
+              items = parseWpSearchJson(mapped, baseUrl)
+            }
+          } catch (postsErr) {
+            logger.warn?.('zardfilm wp posts search failed', { message: postsErr.message, q })
+          }
+        }
+        // 3) HTML fallback
+        if (!items.length) {
+          try {
+            const html = await fetchHtml(`${baseUrl}/?s=${encodeURIComponent(q)}`)
+            items = parseSearchHtml(html, baseUrl)
+          } catch {
+            /* ignore */
+          }
+        }
         const mapped = mapItems(items)
         cache.set(cacheKey, mapped, mapped.length ? CACHE_LIST_MS : CACHE_EMPTY_MS)
         logger.info?.('zardfilm search', { q, count: mapped.length })
@@ -228,7 +270,13 @@ export function createZardFilmProvider(deps = {}) {
           externalRefs: { pagePath, imdb: img.imdb || meta.imdb },
         }
         cache.set(cacheKey, detail, streams.length || videos.length ? CACHE_DETAIL_MS : 60_000)
-        logger.info?.('zardfilm detail', { pagePath, type: detail.type, streams: streams.length, videos: videos.length, imdb: detail.imdb })
+        logger.info?.('zardfilm detail', {
+          pagePath,
+          type: detail.type,
+          streams: streams.length,
+          videos: videos.length,
+          imdb: detail.imdb,
+        })
         return detail
       } catch (err) {
         logger.warn?.('zardfilm detail failed', { message: err.message, itemId })
@@ -240,15 +288,25 @@ export function createZardFilmProvider(deps = {}) {
       if (!detail) return []
       const season = videoCtx?.season
       const episode = videoCtx?.episode
+
       if (detail.type === 'series' && season != null && episode != null) {
-        const ep = (detail.episodes || []).find((e) => Number(e.season) === Number(season) && Number(e.episode) === Number(episode))
+        const ep = (detail.episodes || []).find(
+          (e) => Number(e.season) === Number(season) && Number(e.episode) === Number(episode),
+        )
         if (ep?.streams?.length) return ep.streams.map(toStream)
-        const tagged = (detail.streams || []).filter((s) => Number(s.season || 1) === Number(season) && Number(s.episode) === Number(episode))
+        const tagged = (detail.streams || []).filter(
+          (s) =>
+            Number(s.season || 1) === Number(season) &&
+            Number(s.episode) === Number(episode),
+        )
         if (tagged.length) return tagged.map(toStream)
         return []
       }
+
       if (!detail.streams?.length) return []
-      if (detail.type === 'series') return detail.streams.filter((s) => !s.episode).map(toStream)
+      if (detail.type === 'series') {
+        return detail.streams.filter((s) => !s.episode).map(toStream)
+      }
       return detail.streams.map(toStream)
     },
 
@@ -284,7 +342,10 @@ function mapItems(parsed) {
 }
 
 function withTimeout(promise, ms) {
-  return Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(null), ms))])
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(null), ms)),
+  ])
 }
 
 export default createZardFilmProvider
