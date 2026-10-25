@@ -1,18 +1,25 @@
 /**
- * CinemaGraphy NEXT — Complete Liquid Glass Modern RTL Landing Page
+ * Landing page — restored via parts after accidental truncate on GitHub.
  */
 import { ASSET_BG, ASSET_MARK, ASSET_FAV, ASSET_DIGI_FAV } from './landing-assets.js'
+import { PART0 } from './landing-part-0.js'
+import { PART1 } from './landing-part-1.js'
+import { PART2 } from './landing-part-2.js'
+import { PART3 } from './landing-part-3.js'
 
-function esc(s) {
-  return String(s ?? '')
-    .replace(/&/g, '&')
-    .replace(/</g, '<')
-    .replace(/>/g, '>')
-    .replace(/"/g, '"')
-}
+const FULL = PART0 + PART1 + PART2 + PART3
 
 export function renderLanding(opts = {}) {
-  // NOTE: truncated restore marker - full content follows in next push if needed
-  const free = opts.freeProviders ?? ['f2media', 'aslmoviez', 'zardfilm']
-  return `<!DOCTYPE html><html><body><h1>RESTORING</h1><p>Use local landing.js</p></body></html>`
+  const stripped = FULL
+    .replace(/^import\s+[\s\S]*?from\s+['"][^'"]+['"];?\s*/m, '')
+    .replace(/export\s+function\s+renderLanding/, 'function renderLanding')
+  const runner = new Function(
+    'ASSET_BG',
+    'ASSET_MARK',
+    'ASSET_FAV',
+    'ASSET_DIGI_FAV',
+    'opts',
+    stripped + '\nreturn renderLanding(opts);',
+  )
+  return runner(ASSET_BG, ASSET_MARK, ASSET_FAV, ASSET_DIGI_FAV, opts)
 }

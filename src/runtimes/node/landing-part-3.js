@@ -1,0 +1,1 @@
+export const PART3 = `\n        img.onerror = function() { setStatus(card, false); };\n        img.src = 'https://' + domain + '/favicon.ico?' + new Date().getTime();\n      });\n    });\n})();\n</script>\n</body>\n</html>\`\n}\n`
