@@ -130,11 +130,9 @@ export function createZardFilmProvider(deps = {}) {
       const hit = cache.get(cacheKey)
       if (Array.isArray(hit) && hit.length) return hit
       try {
-        // site HTML /?s= is often empty (client-side search only)
         if (page > 1) return []
         let items = []
         const jsonHeaders = { Accept: 'application/json', Referer: baseUrl + '/' }
-        // 1) WP search endpoint
         try {
           const apiUrl = `${baseUrl}/wp-json/wp/v2/search?search=${encodeURIComponent(q)}&per_page=24&subtype=post`
           const res = await http.get(apiUrl, { timeoutMs: 14_000, headers: jsonHeaders })
@@ -145,7 +143,6 @@ export function createZardFilmProvider(deps = {}) {
         } catch (apiErr) {
           logger.warn?.('zardfilm wp search failed', { message: apiErr.message, q })
         }
-        // 2) WP posts search (often richer than /search)
         if (!items.length) {
           try {
             const postsUrl = `${baseUrl}/wp-json/wp/v2/posts?search=${encodeURIComponent(q)}&per_page=24&_fields=id,link,title,slug`
@@ -162,7 +159,6 @@ export function createZardFilmProvider(deps = {}) {
             logger.warn?.('zardfilm wp posts search failed', { message: postsErr.message, q })
           }
         }
-        // 3) HTML fallback
         if (!items.length) {
           try {
             const html = await fetchHtml(`${baseUrl}/?s=${encodeURIComponent(q)}`)
@@ -321,7 +317,7 @@ function toStream(s) {
   const badge = s.badge || s.name || 'HD'
   return {
     url: s.url,
-    name: `ZardFilm ${badge}`,
+    name: badge,
     title: s.label || s.title || badge,
     quality: s.quality,
     providerKey: 'zardfilm',
