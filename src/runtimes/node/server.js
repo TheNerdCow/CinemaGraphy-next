@@ -22,6 +22,7 @@ import { fromStremioProviderId, toStremioProviderId } from '../../core/ids/names
 import { setSessionCookie, getSessionCookie } from './session-store.js'
 import { bootNetwork } from './boot-net.js'
 import { renderLanding } from './landing.js'
+import { registerDarametRoutes } from './daramet-api.js'
 
 bootNetwork()
 loadEnvFile('.env')
@@ -324,6 +325,8 @@ function createApp() {
 
   app.get('/', (req, res) => res.type('html').send(landingHtml({}, req)))
   app.get('/configure', (req, res) => res.type('html').send(landingHtml({}, req)))
+
+  registerDarametRoutes(app, { log })
 
   app.get('/api/sources-status', async (_req, res) => {
     const now = Date.now()
